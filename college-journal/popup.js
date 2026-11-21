@@ -78,7 +78,7 @@ autoButton.addEventListener("click", () => {
 
 document.querySelector("#dashboard").addEventListener("click", async () => {
   try {
-    await chrome.tabs.create({url: chrome.runtime.getURL("dashboard.html")});
+    await chrome.tabs.create({url: chrome.runtime.getURL("dashboard.html") + (tabId === undefined ? "" : "?sourceTab=" + tabId)});
   } catch (error) {
     status.textContent = "Не удалось открыть дашборд. " + error.message;
   }

@@ -12,6 +12,19 @@
   const visible = (element) => Boolean(element.getClientRects().length)
     && getComputedStyle(element).visibility === "visible";
 
+  const readPeriod = () => text(all(document, "#x-desktop .widget .title")
+      .find((element) => text(element) === "Период обучения")?.nextElementSibling);
+
+  const courseSuffix = /\s[-–—]\s\d+\s+курс$/i;
+  const groupCode = /^[\p{L}\p{N}]+(?:[-–—][\p{L}\p{N}]+){2,}$/u;
+
+  function groupLists() {
+    return all(document, ".x-combo-list-inner").map((list) => ({
+      list, names: all(list, ".x-combo-list-item").map(text).filter(Boolean)
+    })).filter(({names}) => names.some((name) => courseSuffix.test(name))
+      && names.every((name) => courseSuffix.test(name) || groupCode.test(name)));
+  }
+
   function findScope() {
     const journals = all(document, ".x-window").filter((window) =>
       visible(window) && /^Журнал теоретических занятий/.test(
@@ -32,11 +45,11 @@
     const fields = all(panel ?? window, ".x-form-item").filter((item) =>
       /^Предмет\s*:?$/.test(text(item.querySelector("label"))) && visible(item)
     ).map((item) => item.querySelector('input[type="text"]')).filter(Boolean);
-    const groupLabels = all(document, ".x-combo-list-inner .x-combo-selected")
-      .map(text).filter((label) => /\s[-–—]\s\d+\s+курс$/i.test(label));
-    const group = groupLabels.length === 1 ? groupLabels[0] : "";
-    const period = text(all(document, "#x-desktop .widget .title")
-      .find((element) => text(element) === "Период обучения")?.nextElementSibling);
+    const groupLabels = groupLists().flatMap(({list}) => all(list, ".x-combo-selected").map(text));
+    const fallback = groupLabels.length ? groupLabels : all(document, ".x-combo-list-inner .x-combo-selected")
+      .map(text).filter((label) => courseSuffix.test(label));
+    const group = fallback.length === 1 ? fallback[0] : "";
+    const period = readPeriod();
     return {window, grid, field: fields.length === 1 ? fields[0] : null, group, period};
   }
 
@@ -96,6 +109,8 @@
   let candidate;
   let stableSince = 0;
   let sending = false;
+  let readingGroups = false;
+  let catalogMessage = "";
 
   async function scan() {
     if (!manual || sending || auto.running) return;
@@ -129,6 +144,30 @@
   async function save(journal) {
     const result = await chrome.runtime.sendMessage({type: "saveJournal", journal});
     if (!result?.ok) throw new Error(result?.error || "Не удалось сохранить журнал.");
+  }
+
+  async function saveCatalog(period, groups) {
+    const result = await chrome.runtime.sendMessage({
+      type: "saveCatalog", catalog: {origin: location.origin, period, groups}
+    });
+    if (!result?.ok) throw new Error(result?.error || "Не удалось сохранить справочник.");
+  }
+
+  async function collectGroups() {
+    if (!document.querySelector("#x-desktop")) {
+      throw new Error("Откройте «Электронный колледж».");
+    }
+    const signal = new AbortController().signal;
+    const groups = await waitStable(() => {
+      const lists = groupLists();
+      const expanded = lists.filter(({list}) => visible(list));
+      const [match] = expanded.length === 1 ? expanded : lists.length === 1 ? lists : [];
+      if (!match) return null;
+      const names = [...new Set(match.names)];
+      return {key: JSON.stringify(names), value: names};
+    }, signal, "Список групп не найден. Раскройте список групп на сайте и повторите сбор.");
+    await saveCatalog(readPeriod(), groups.map((name) => ({name})));
+    return `В справочник добавлено групп — ${groups.length}.`;
   }
 
   function pageCommand(scope, action, option) {
@@ -213,6 +252,11 @@
     if (!scope) throw new Error("Окно журнала стало недоступно.");
     pageCommand(scope, "close");
     auto.total = options.length;
+    if (scope.group) {
+      await saveCatalog(scope.period, [{
+        name: scope.group, disciplines: options.map(({label, value}) => ({id: value, name: label}))
+      }]);
+    }
 
     const selected = pageCommand(scope, "state").value;
     const ordered = [...options.filter(({value}) => value === selected),
@@ -251,7 +295,14 @@
       candidate = undefined;
     }
     if (message.stopAuto) controller?.abort();
-    if (message.startAuto && !auto.running) {
+    if (message.catalog && !auto.running && !readingGroups) {
+      readingGroups = true;
+      catalogMessage = "Ожидание списка групп…";
+      collectGroups().then((result) => { catalogMessage = result; })
+        .catch((error) => { catalogMessage = error.message; })
+        .finally(() => { readingGroups = false; });
+    }
+    if (message.startAuto && !auto.running && !readingGroups) {
       manual = false;
       controller = new AbortController();
       auto = {running: true, saved: 0, total: 0, message: "Ожидание списка предметов…"};
@@ -263,7 +314,7 @@
         controller = undefined;
       });
     }
-    reply({running: manual, auto});
+    reply({running: manual, auto, readingGroups, catalogMessage});
   }
 
   globalThis.collegeJournalCollector = true;

@@ -5,7 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Дашборд журналов колледжа</title>
   <link rel="stylesheet" href="dashboard.css">
+  <script defer src="catalog.js"></script>
   <script defer src="dashboard.js"></script>
+  <script defer src="catalog-file.js"></script>
 </head>
 <body>
   <main class="dashboard">
@@ -16,7 +18,23 @@
       </div>
     </header>
 
-    <dl class="summary" aria-label="Сводка по всем журналам">
+    <section class="tools" aria-label="Управление сбором">
+      <div class="actions">
+        <button type="button" id="read-groups">Считать список групп</button>
+        <button type="button" id="collect-group">Собрать открытую группу</button>
+        <button type="button" id="open-source">К журналу колледжа</button>
+      </div>
+      <p id="source-status" class="muted" role="status"></p>
+      <div class="actions">
+        <button type="button" id="connect-file">Сохранить БД в папку расширения</button>
+        <button type="button" id="download-file">Скачать БД</button>
+      </div>
+      <p id="file-status" class="muted" role="status"></p>
+    </section>
+
+    <dl class="summary" aria-label="Сводка по выбранным данным">
+      <div><dt>Группы</dt><dd id="group-count">0</dd></div>
+      <div><dt>Дисциплины</dt><dd id="subject-count">0</dd></div>
       <div><dt>Журналы</dt><dd id="journal-count">0</dd></div>
       <div><dt>Студенты</dt><dd id="student-count">0</dd></div>
       <div><dt>Занятия</dt><dd id="lesson-count">0</dd></div>
@@ -24,13 +42,15 @@
 
     <section class="data" aria-label="Собранные данные">
       <nav class="views" aria-label="Вид данных">
-        <button type="button" data-view="journals" aria-pressed="true">Журналы</button>
+        <button type="button" data-view="groups" aria-pressed="true">Группы</button>
+        <button type="button" data-view="subjects" aria-pressed="false">Дисциплины</button>
+        <button type="button" data-view="journals" aria-pressed="false">Журналы</button>
         <button type="button" data-view="students" aria-pressed="false">Студенты</button>
         <button type="button" data-view="lessons" aria-pressed="false">Занятия</button>
       </nav>
 
       <div class="filters">
-        <label>Журнал
+        <label id="journal-label" hidden>Журнал
           <select id="journal-filter"><option value="">Все журналы</option></select>
         </label>
         <label>Поиск
@@ -38,6 +58,10 @@
         </label>
       </div>
 
+      <div class="analysis">
+        <label><input id="selected-only" type="checkbox"> Только отмеченные группы</label>
+        <span id="selected-count" class="muted" role="status"></span>
+      </div>
       <div class="table-wrap" id="table-wrap" hidden>
         <table id="results" aria-label="Журналы">
           <thead></thead>

@@ -65,3 +65,18 @@ tbody tr:hover { background: #f5faf9; }
   .summary div { padding: 12px 8px; }
   .filters { grid-template-columns: 1fr; }
 }
+
+[hidden] { display: none !important; }
+.summary { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.tools { background: #fff; border: 1px solid var(--border); border-radius: 13px; padding: 14px 18px; margin-bottom: 16px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.actions button { border-color: var(--border); }
+.actions button:disabled { cursor: default; opacity: .5; }
+.tools p { margin: 6px 0 12px; }
+.tools p:last-child { margin-bottom: 0; }
+.analysis { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; padding: 0 18px 16px; }
+.analysis label { display: flex; align-items: center; }
+input[type="checkbox"] { width: auto; margin: 0 4px 0 0; accent-color: var(--accent); }
+@media (max-width: 720px) {
+  .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

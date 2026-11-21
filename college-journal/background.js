@@ -1,3 +1,5 @@
+importScripts("catalog.js");
+
 let pending = Promise.resolve();
 
 async function saveJournal(journal, tabId) {
@@ -22,9 +24,26 @@ async function saveJournal(journal, tabId) {
   await chrome.action.setBadgeText({tabId, text: String(count)}).catch(() => {});
 }
 
+async function saveCatalog({origin, period, groups}) {
+  const keys = groups.map(({name}) => groupPrefix + groupKey(origin, period, name));
+  const stored = await chrome.storage.local.get(keys);
+  const records = {};
+  for (const [index, group] of groups.entries()) {
+    const storageKey = keys[index];
+    const previous = stored[storageKey];
+    records[storageKey] = {
+      key: storageKey.slice(groupPrefix.length), origin, period, name: previous?.name || group.name,
+      disciplines: group.disciplines ?? previous?.disciplines ?? []
+    };
+  }
+  await chrome.storage.local.set(records);
+}
+
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
-  if (message.type !== "saveJournal" || sender.tab?.id === undefined) return;
-  const operation = pending.then(() => saveJournal(message.journal, sender.tab.id));
+  if (sender.tab?.id === undefined || !["saveJournal", "saveCatalog"].includes(message.type)) return;
+  const operation = pending.then(() => message.type === "saveJournal"
+    ? saveJournal(message.journal, sender.tab.id)
+    : saveCatalog(message.catalog));
   pending = operation.catch(() => {});
   operation.then(() => reply({ok: true}), (error) => reply({ok: false, error: error.message}));
   return true;

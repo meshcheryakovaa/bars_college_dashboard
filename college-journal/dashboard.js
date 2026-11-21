@@ -1,6 +1,7 @@
-const journalPrefix = "journal:";
-const journals = new Map();
 const journalFilter = document.querySelector("#journal-filter");
+const journalLabel = document.querySelector("#journal-label");
+const selectedOnly = document.querySelector("#selected-only");
+const selectedCount = document.querySelector("#selected-count");
 const search = document.querySelector("#search");
 const updated = document.querySelector("#updated");
 const table = document.querySelector("#results");
@@ -11,33 +12,57 @@ const empty = document.querySelector("#empty");
 const resultCount = document.querySelector("#result-count");
 const viewButtons = [...document.querySelectorAll("[data-view]")];
 const dateTime = new Intl.DateTimeFormat("ru", {dateStyle: "short", timeStyle: "medium"});
-let view = "journals";
+const storageState = {};
+let view = "groups";
 let loaded = false;
+let context;
 
-const contextHeaders = ["Группа (подсказка)", "Предмет", "Учебный период"];
-const context = (journal) => [journal.group, journal.subject, journal.period];
+const groupColumns = (group) => [group.name, group.period];
+const journalColumns = (journal) => [journal.group, journal.subject, journal.period];
+const journalViews = new Set(["journals", "lessons"]);
 const views = {
-  journals: {
-    title: "Журналы",
-    headers: [...contextHeaders, "Студентов", "Занятий", "Последний сбор"],
-    placeholder: "Предмет, группа или учебный период",
-    rows: (journal) => [[...context(journal), journal.students.length, journal.lessons.length, formatTime(journal.savedAt)]]
+  groups: {
+    title: "Группы",
+    headers: ["Для анализа", "Группа", "Учебный период", "Дисциплин", "Студентов"],
+    placeholder: "Название группы или учебный период",
+    rows: ({groups}) => groups.map((group) => [
+      {group}, ...groupColumns(group), group.disciplines.size, group.students.size
+    ])
+  },
+  subjects: {
+    title: "Дисциплины",
+    headers: ["Дисциплина", "ID в списке", "Группа", "Учебный период"],
+    placeholder: "Название дисциплины, ID или группа",
+    rows: ({groups}) => groups.flatMap((group) => [...group.disciplines.values()].map((item) =>
+      [item.name, item.id, ...groupColumns(group)]
+    ))
   },
   students: {
     title: "Студенты",
-    headers: ["№ по списку", "Ф. И. О.", "ID студента", ...contextHeaders],
-    placeholder: "Ф. И. О., ID, предмет или группа",
-    rows: (journal) => journal.students.map((student) =>
-      [student.number, student.name, student.id, ...context(journal)]
-    )
+    headers: ["Ф. И. О.", "ID студента", "Группа", "Учебный период"],
+    placeholder: "Ф. И. О., ID или группа",
+    rows: ({groups, unassigned}) => [
+      ...groups.flatMap((group) => [...group.students.values()].map((item) =>
+        [item.name, item.id, ...groupColumns(group)]
+      )),
+      ...unassigned.map((item) => [item.name, item.id, "", item.period])
+    ]
+  },
+  journals: {
+    title: "Журналы",
+    headers: ["Группа", "Предмет", "Учебный период", "Студентов", "Занятий", "Последний сбор"],
+    placeholder: "Предмет, группа или учебный период",
+    rows: ({journals}) => journals.map((item) => [
+      ...journalColumns(item), item.students.length, item.lessons.length, formatTime(item.savedAt)
+    ])
   },
   lessons: {
     title: "Занятия",
-    headers: ["№ занятия", "Дата", "ID занятия", ...contextHeaders],
+    headers: ["№ занятия", "Дата", "ID занятия", "Группа", "Предмет", "Учебный период"],
     placeholder: "Дата, ID, предмет или группа",
-    rows: (journal) => journal.lessons.map((lesson) =>
-      [lesson.number, lesson.date, lesson.id, ...context(journal)]
-    )
+    rows: ({journals}) => journals.flatMap((journal) => journal.lessons.map((item) =>
+      [item.number, item.date, item.id, ...journalColumns(journal)]
+    ))
   }
 };
 
@@ -54,36 +79,73 @@ function makeOption(value, label) {
 }
 
 function renderSummary() {
-  const entries = [...journals].sort(([, a], [, b]) => b.savedAt.localeCompare(a.savedAt));
+  const {groups, selected, unassigned} = catalogFromStorage(storageState);
+  const only = selectedOnly.checked;
+  const filteredGroups = [...groups.values()].filter(({key}) => !only || selected.has(key))
+    .sort((a, b) => a.name.localeCompare(b.name, "ru", {numeric: true}));
+  const entries = Object.entries(storageState).filter(([key, journal]) => key.startsWith("journal:")
+    && (!only || selected.has(groupKey(journal.origin, journal.period, journal.group))))
+    .sort(([, a], [, b]) => b.savedAt.localeCompare(a.savedAt));
   const studentIds = new Set();
   const lessonIds = new Set();
+  const subjectNames = new Set(filteredGroups.flatMap((group) => [...group.disciplines.keys()]));
   const selection = journalFilter.value;
   const options = [makeOption("", "Все журналы")];
+
   for (const [key, journal] of entries) {
-    for (const {id} of journal.students) studentIds.add(JSON.stringify([journal.origin, id]));
+    for (const student of journal.students) {
+      const id = JSON.stringify([journal.origin, student.id]);
+      studentIds.add(id);
+    }
     for (const {id} of journal.lessons) lessonIds.add(JSON.stringify([journal.origin, id]));
+    subjectNames.add(journal.subject);
     const label = [journal.subject, journal.group, journal.period].filter(Boolean).join(" · ");
     options.push(makeOption(key, label));
   }
   journalFilter.replaceChildren(...options);
-  journalFilter.value = journals.has(selection) ? selection : "";
+  journalFilter.value = entries.some(([key]) => key === selection) ? selection : "";
   journalFilter.disabled = !entries.length;
 
-  document.querySelector("#journal-count").textContent = entries.length;
-  document.querySelector("#student-count").textContent = studentIds.size;
-  document.querySelector("#lesson-count").textContent = lessonIds.size;
+  for (const [id, value] of Object.entries({
+    "group-count": filteredGroups.length, "subject-count": subjectNames.size, "journal-count": entries.length,
+    "student-count": studentIds.size, "lesson-count": lessonIds.size
+  })) document.querySelector("#" + id).textContent = value;
+  selectedCount.textContent = `Отмечено групп — ${selected.size}`;
   updated.textContent = entries.length
-    ? "Последний сбор — " + formatTime(entries[0][1].savedAt) + ". Данные обновляются автоматически."
-    : "Данные появятся здесь, когда расширение считает первый журнал.";
+    ? "Последний сбор журнала — " + formatTime(entries[0][1].savedAt)
+    : "Собранные данные хранятся в этом профиле браузера.";
 
+  context = {groups: filteredGroups, entries, unassigned: only ? [] : [...unassigned.values()], selected};
   renderTable();
+}
+
+function groupCheckbox(group) {
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = context.selected.has(group.key);
+  checkbox.setAttribute("aria-label", "Для анализа — " + group.name + " · " + group.period);
+  checkbox.addEventListener("change", async () => {
+    const key = selectionPrefix + group.key;
+    checkbox.disabled = true;
+    try {
+      if (checkbox.checked) await chrome.storage.local.set({[key]: true});
+      else await chrome.storage.local.remove(key);
+    } catch (error) {
+      checkbox.checked = !checkbox.checked;
+      updated.textContent = "Не удалось сохранить выбор группы. " + error.message;
+    } finally {
+      checkbox.disabled = false;
+    }
+  });
+  return checkbox;
 }
 
 function appendRow(parent, values, tag) {
   const row = document.createElement("tr");
   for (const value of values) {
     const cell = document.createElement(tag);
-    cell.textContent = value === "" || value == null ? "—" : value;
+    if (value?.group) cell.append(groupCheckbox(value.group));
+    else cell.textContent = value === "" || value == null ? "—" : value;
     if (tag === "th") cell.scope = "col";
     row.append(cell);
   }
@@ -94,11 +156,12 @@ function renderTable() {
   if (!loaded) return;
   const config = views[view];
   const terms = search.value.toLocaleLowerCase("ru").trim().split(/\s+/).filter(Boolean);
-  const options = journalFilter.options;
-  const selection = journalFilter.value;
-  const selected = selection ? [selection] : [...options].slice(1).map((option) => option.value);
-  const rows = selected.flatMap((key) => config.rows(journals.get(key))).filter((row) => {
-    const content = row.join(" ").toLocaleLowerCase("ru");
+  const useJournalFilter = journalViews.has(view);
+  journalLabel.hidden = !useJournalFilter;
+  const selection = useJournalFilter ? journalFilter.value : "";
+  const journals = context.entries.filter(([key]) => !selection || key === selection).map(([, item]) => item);
+  const rows = config.rows({...context, journals}).filter((row) => {
+    const content = row.filter((cell) => typeof cell !== "object").join(" ").toLocaleLowerCase("ru");
     return terms.every((term) => content.includes(term));
   });
 
@@ -111,9 +174,9 @@ function renderTable() {
   body.replaceChildren(fragment);
   tableWrap.hidden = rows.length === 0;
   empty.hidden = rows.length !== 0;
-  empty.textContent = journals.size
-    ? "Записей по выбранным условиям нет."
-    : "Откройте журнал на сайте колледжа и нажмите «Собрать журналы группы» в меню расширения.";
+  empty.textContent = selectedOnly.checked && !context.selected.size
+    ? "Отметьте группы на вкладке «Группы» при выключенном фильтре."
+    : "Записей по выбранным условиям пока нет.";
   resultCount.textContent = rows.length ? "Строк в таблице — " + rows.length.toLocaleString("ru") : "";
 }
 
@@ -126,28 +189,111 @@ for (const button of viewButtons) {
 }
 journalFilter.addEventListener("change", renderTable);
 search.addEventListener("input", renderTable);
+selectedOnly.addEventListener("change", () => {
+  renderSummary();
+  void chrome.storage.local.set({"catalog:show-selected": selectedOnly.checked}).catch((error) => {
+    updated.textContent = "Не удалось сохранить фильтр. " + error.message;
+  });
+});
 
 const changedDuringLoad = new Set();
+const isCatalogEntry = (key) => key.startsWith("journal:") || key.startsWith("catalog:");
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   let refresh = false;
   for (const [key, {newValue}] of Object.entries(changes)) {
-    if (!key.startsWith(journalPrefix)) continue;
-    if (newValue) journals.set(key, newValue);
-    else journals.delete(key);
+    if (!isCatalogEntry(key)) continue;
+    if (newValue !== undefined) storageState[key] = newValue;
+    else delete storageState[key];
     if (!loaded) changedDuringLoad.add(key);
+    if (key === "catalog:show-selected") selectedOnly.checked = Boolean(newValue);
     refresh = true;
   }
   if (loaded && refresh) renderSummary();
 });
 
+selectedOnly.disabled = true;
 chrome.storage.local.get(null).then((stored) => {
   for (const [key, record] of Object.entries(stored)) {
-    if (key.startsWith(journalPrefix) && !changedDuringLoad.has(key)) journals.set(key, record);
+    if (isCatalogEntry(key) && !changedDuringLoad.has(key)) storageState[key] = record;
   }
   changedDuringLoad.clear();
+  selectedOnly.checked = Boolean(storageState["catalog:show-selected"]);
+  selectedOnly.disabled = false;
   loaded = true;
   renderSummary();
 }).catch(() => {
-  updated.textContent = "Не удалось прочитать журналы. Обновите вкладку и попробуйте снова.";
+  updated.textContent = "Не удалось прочитать справочник. Обновите вкладку.";
 });
+
+const sourceStatus = document.querySelector("#source-status");
+const readGroups = document.querySelector("#read-groups");
+const collectGroup = document.querySelector("#collect-group");
+const openSource = document.querySelector("#open-source");
+const source = new URLSearchParams(location.search).get("sourceTab");
+const sourceTab = /^\d+$/.test(source ?? "") ? Number(source) : undefined;
+let sourceBusy = false;
+let sourceRun = false;
+let sourceError = "";
+
+function sendSource(action) {
+  return chrome.tabs.sendMessage(sourceTab, {type: "collectorStatus", ...action});
+}
+
+function showSource(state) {
+  sourceRun = Boolean(state?.auto?.running);
+  readGroups.disabled = sourceBusy || sourceTab === undefined || sourceRun || Boolean(state?.readingGroups);
+  collectGroup.disabled = sourceBusy || sourceTab === undefined || Boolean(state?.readingGroups);
+  openSource.disabled = sourceTab === undefined;
+  collectGroup.textContent = sourceRun ? "Остановить автосбор" : "Собрать открытую группу";
+  const progress = state?.auto;
+  const autoText = progress?.message && [progress.total ? `${progress.saved} из ${progress.total}.` : "", progress.message].filter(Boolean).join(" ");
+  sourceStatus.textContent = sourceError || [
+    state?.catalogMessage, autoText
+  ].filter(Boolean).join(" · ") || (sourceTab === undefined
+    ? "Откройте дашборд из меню расширения на вкладке колледжа, чтобы управлять сбором."
+    : "Раскройте список групп на сайте колледжа, затем нажмите «Считать список групп».");
+}
+
+async function operateSource(action) {
+  if (sourceBusy || sourceTab === undefined) return;
+  sourceBusy = true;
+  sourceError = "";
+  readGroups.disabled = collectGroup.disabled = true;
+  let state;
+  try {
+    const target = {tabId: sourceTab};
+    if (action.startAuto) {
+      await chrome.scripting.executeScript({target, world: "MAIN", files: ["journal-page.js"]});
+    }
+    if (action.startAuto || action.catalog) {
+      await chrome.scripting.executeScript({target, files: ["collector.js"]});
+    }
+    state = await sendSource(action);
+  } catch {
+    sourceError = "Связь с журналом недоступна. Откройте дашборд заново из вкладки колледжа.";
+  } finally {
+    sourceBusy = false;
+    showSource(state);
+  }
+}
+
+readGroups.addEventListener("click", () => void operateSource({catalog: true}));
+collectGroup.addEventListener("click", () => void operateSource(sourceRun ? {stopAuto: true} : {startAuto: true}));
+openSource.addEventListener("click", async () => {
+  try {
+    const tab = await chrome.tabs.update(sourceTab, {active: true});
+    await chrome.windows.update(tab.windowId, {focused: true});
+  } catch {
+    sourceError = "Вкладка колледжа закрыта. Откройте дашборд заново из меню расширения.";
+    showSource();
+  }
+});
+showSource();
+if (sourceTab !== undefined) {
+  setInterval(async () => {
+    if (sourceBusy) return;
+    const state = await sendSource().catch(() => null);
+    if (!sourceBusy) showSource(state);
+  }, 850);
+}
