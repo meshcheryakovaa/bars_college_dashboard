@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Сборщик журналов колледжа</title>
+  <link rel="stylesheet" href="popup.css">
+  <script defer src="jszip.min.js"></script>
+  <script defer src="workbook.js"></script>
+  <script defer src="popup.js"></script>
+</head>
+<body>
+  <h1>Журналы колледжа</h1>
+  <p id="status" role="status">Проверяем состояние сбора…</p>
+  <button type="button" id="toggle" disabled>Запустить сбор</button>
+  <button type="button" id="auto" disabled>Собрать журналы группы</button>
+  <p id="auto-status" class="detail" role="status"></p>
+  <p id="totals"></p>
+  <button type="button" id="dashboard">Открыть дашборд</button>
+  <button type="button" id="download" disabled>Скачать Excel</button>
+  <p id="last" class="detail"></p>
+</body>
+</html>

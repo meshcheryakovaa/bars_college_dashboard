@@ -1,0 +1,26 @@
+body {
+  width: 310px;
+  margin: 0;
+  padding: 18px;
+  background: #f8fafc;
+  color: #182738;
+  font: 14px/1.45 system-ui, sans-serif;
+}
+h1 { margin: 0; font-size: 20px; }
+button {
+  width: 100%;
+  padding: 9px;
+  border: 1px solid #244667;
+  border-radius: 6px;
+  background: #fff;
+  color: #15334f;
+  font: inherit;
+  font-weight: 600;
+}
+#toggle { background: #153d60; color: #fff; }
+button:disabled { opacity: .5; }
+button:focus-visible { outline: 2px solid #0076bd; outline-offset: 2px; }
+.detail { margin-bottom: 0; color: #40566c; }
+.detail:empty { display: none; }
+#dashboard { margin-bottom: 7px; }
+#auto { margin-top: 7px; }

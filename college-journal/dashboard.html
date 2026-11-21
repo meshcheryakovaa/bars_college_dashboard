@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Дашборд журналов колледжа</title>
+  <link rel="stylesheet" href="dashboard.css">
+  <script defer src="dashboard.js"></script>
+</head>
+<body>
+  <main class="dashboard">
+    <header class="heading">
+      <div>
+        <h1>Журналы колледжа</h1>
+        <p id="updated" class="muted" role="status">Загрузка данных…</p>
+      </div>
+    </header>
+
+    <dl class="summary" aria-label="Сводка по всем журналам">
+      <div><dt>Журналы</dt><dd id="journal-count">0</dd></div>
+      <div><dt>Студенты</dt><dd id="student-count">0</dd></div>
+      <div><dt>Занятия</dt><dd id="lesson-count">0</dd></div>
+    </dl>
+
+    <section class="data" aria-label="Собранные данные">
+      <nav class="views" aria-label="Вид данных">
+        <button type="button" data-view="journals" aria-pressed="true">Журналы</button>
+        <button type="button" data-view="students" aria-pressed="false">Студенты</button>
+        <button type="button" data-view="lessons" aria-pressed="false">Занятия</button>
+      </nav>
+
+      <div class="filters">
+        <label>Журнал
+          <select id="journal-filter"><option value="">Все журналы</option></select>
+        </label>
+        <label>Поиск
+          <input id="search" type="search" placeholder="Предмет, группа или учебный период">
+        </label>
+      </div>
+
+      <div class="table-wrap" id="table-wrap" hidden>
+        <table id="results" aria-label="Журналы">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="empty" id="empty" hidden></p>
+      <p class="muted result-count" id="result-count" aria-live="polite"></p>
+    </section>
+  </main>
+</body>
+</html>
