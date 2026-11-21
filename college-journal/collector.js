@@ -25,25 +25,28 @@
       && names.every((name) => courseSuffix.test(name) || groupCode.test(name)));
   }
 
-  function groupField(window) {
+  function labeledField(window, label) {
     if (!window) return null;
     const fields = all(window, ".x-form-item")
-      .filter((item) => visible(item) && /^(учебная\s+)?группа\s*[:*]?$/i.test(text(item.querySelector("label"))))
+      .filter((item) => visible(item) && label.test(text(item.querySelector("label"))))
       .map((item) => item.querySelector('input[type="text"]'))
       .filter((field) => field?.id && visible(field) && !field.disabled);
     return fields.length === 1 ? fields[0] : null;
   }
 
+  const groupField = (window) => labeledField(window, /^(учебная\s+)?группа\s*[:*]?$/i);
+  const dateFields = (window) => [labeledField(window, /^с\s*:?$/i), labeledField(window, /^по\s*:?$/i)];
   let recentGroupList;
 
   function findScope() {
     const journals = all(document, ".x-window").filter((window) =>
-      visible(window) && /^Журнал теоретических занятий/.test(
+      visible(window) && /^Журнал (теоретических|практических) занятий/.test(
         text(window.querySelector(".x-window-header-text"))
       )
-    );
-    if (journals.length !== 1) return null;
+    ).sort((a, b) => Number(b.style.zIndex || 0) - Number(a.style.zIndex || 0));
     const [window] = journals;
+    if (!window || journals.length > 1 && window.style.zIndex === journals[1].style.zIndex) return null;
+    const practical = /^Журнал практических занятий/.test(text(window.querySelector(".x-window-header-text")));
     if (!all(window, ".x-tab-strip-active .x-tab-strip-text").some((tab) => text(tab) === "Журнал")) {
       return null;
     }
@@ -66,7 +69,7 @@
     const group = courseSuffix.test(fieldValue) || groupCode.test(fieldValue)
       ? fieldValue : fallback.length === 1 ? fallback[0] : "";
     const period = readPeriod();
-    return {window, grid, field: fields.length === 1 ? fields[0] : null, group, period};
+    return {window, grid, field: fields.length === 1 ? fields[0] : null, group, period, practical};
   }
 
   const masked = () => all(document, ".ext-el-mask, .ext-el-mask-msg").some(visible);
@@ -113,7 +116,7 @@
     }
     if (new Set(lessons.map(({id}) => id)).size !== lessons.length) return null;
 
-    return {origin: location.origin, period, group, subject, students, lessons};
+    return {origin: location.origin, period, group, subject, students, lessons, ...(scope.practical ? {kind: "practical"} : {})};
   }
 
   let timer;
@@ -127,6 +130,9 @@
   let sending = false;
   let readingGroups = false;
   let catalogMessage = "";
+  let manualStarted;
+  let autoStarted;
+  let catalogController;
 
   async function scan() {
     if (!manual || sending || auto.running) return;
@@ -147,7 +153,7 @@
 
     sending = true;
     try {
-      await save(journal);
+      await save(journal, manualStarted);
       lastSent = fingerprint;
     } catch (error) {
       if (!chrome.runtime.id) clearInterval(timer);
@@ -157,23 +163,22 @@
     }
   }
 
-  async function save(journal) {
-    const result = await chrome.runtime.sendMessage({type: "saveJournal", journal});
+  async function save(journal, startedAt) {
+    const result = await chrome.runtime.sendMessage({type: "saveJournal", journal, startedAt});
     if (!result?.ok) throw new Error(result?.error || "Не удалось сохранить журнал.");
   }
 
-  async function saveCatalog(period, groups) {
+  async function saveCatalog(period, groups, startedAt) {
     const result = await chrome.runtime.sendMessage({
-      type: "saveCatalog", catalog: {origin: location.origin, period, groups}
+      type: "saveCatalog", startedAt, catalog: {origin: location.origin, period, groups}
     });
     if (!result?.ok) throw new Error(result?.error || "Не удалось сохранить справочник.");
   }
 
-  async function collectGroups() {
+  async function collectGroups(signal, startedAt) {
     if (!document.querySelector("#x-desktop")) {
       throw new Error("Откройте «Электронный колледж».");
     }
-    const signal = new AbortController().signal;
     const groups = await waitStable(() => {
       const lists = groupLists();
       const expanded = lists.filter(({list}) => visible(list));
@@ -182,7 +187,8 @@
       const names = [...new Set(match.names)];
       return {key: JSON.stringify(names), value: names};
     }, signal, "Список групп не найден. Раскройте список групп на сайте и повторите сбор.");
-    await saveCatalog(readPeriod(), groups.map((name) => ({name})));
+    signal.throwIfAborted();
+    await saveCatalog(readPeriod(), groups.map((name) => ({name})), startedAt);
     return `В справочник добавлено групп — ${groups.length}.`;
   }
 
@@ -233,7 +239,34 @@
   }
 
   const groupName = (value) => clean(value).replace(courseSuffix, "").replace(/[–—]/g, "-");
-  async function openBatchGroup(target, signal) {
+  async function applyDates(range, signal) {
+    if (!range) return;
+    const iso = /^\d{4}-\d{2}-\d{2}$/;
+    if (!iso.test(range.from) || !iso.test(range.to) || range.from > range.to) {
+      throw new Error("Дата начала должна быть не позднее даты окончания.");
+    }
+    const dates = [range.from, range.to];
+    const before = await waitStable(() => {
+      const scope = findScope();
+      const fields = dateFields(scope?.window);
+      if (fields.some((field) => !field) || masked() || pageCommand(null, "ajax").busy) return null;
+      const fieldIds = fields.map((field) => field.id);
+      const period = pageCommand(null, "dateState", {fieldIds}).dates;
+      return {key: JSON.stringify([fieldIds, period]), value: {fieldIds, period}};
+    }, signal, "Откройте журнал и дождитесь появления полей «С» и «По».");
+    if (before.period.every((value, i) => value === dates[i])) return;
+
+    pageCommand(null, "setDates", {fieldIds: before.fieldIds, dates});
+    await waitStable(() => {
+      const fields = dateFields(findScope()?.window);
+      if (fields.some((field) => !field) || masked() || pageCommand(null, "ajax").busy) return null;
+      const fieldIds = fields.map((field) => field.id);
+      const actual = pageCommand(null, "dateState", {fieldIds}).dates;
+      return actual.every((value, i) => value === dates[i]) ? {key: fieldIds.join(" "), value: true} : null;
+    }, signal, "Журнал не подтвердил диапазон дат.");
+  }
+
+  async function openBatchGroup(target, signal, practical) {
     const previous = findScope();
     const version = previous && tableVersion(previous);
     let opening;
@@ -245,6 +278,7 @@
       const period = readPeriod();
       if (period !== target.period) throw new Error("Учебный период на сайте изменился.");
       const active = findScope();
+      if (active && active.practical !== practical) throw new Error("Тип журнала изменился.");
       const ajax = pageCommand(null, "ajax");
       if (masked() || ajax.busy) return null;
 
@@ -284,12 +318,15 @@
     }, signal, "Не удалось открыть журнал группы «" + target.name + "».", 650, 120000);
   }
 
-  async function collectMarked(groups, signal) {
+  async function collectMarked(groups, signal, range) {
     const period = readPeriod();
     const available = groups.filter((group) => group.origin === location.origin && group.period === period);
     if (!available.length) throw new Error("Нет отмеченных групп для текущего сайта и учебного периода.");
     recentGroupList = undefined;
-    const current = groupName(findScope()?.group);
+    const initial = findScope();
+    if (!initial) throw new Error("Откройте нужный журнал колледжа.");
+    const {practical} = initial;
+    const current = groupName(initial.group);
     const queue = [...available.filter(({name}) => groupName(name) === current),
       ...available.filter(({name}) => groupName(name) !== current)];
     auto.batch = {done: 0, total: queue.length, group: ""};
@@ -298,7 +335,9 @@
       auto.batch.group = group.name;
       auto.saved = 0;
       auto.total = 0;
-      await openBatchGroup(group, signal);
+      await applyDates(range, signal);
+      await openBatchGroup(group, signal, practical);
+      await applyDates(range, signal);
       await collectGroup(signal, group);
       auto.batch.done++;
     }
@@ -351,7 +390,7 @@
     if (scope.group) {
       await saveCatalog(scope.period, [{
         name: scope.group, disciplines: options.map(({label, value}) => ({id: value, name: label}))
-      }]);
+      }], autoStarted);
     }
 
     const selected = pageCommand(scope, "state").value;
@@ -378,7 +417,7 @@
         return data ? {key: JSON.stringify(data), value: data} : null;
       }, signal, "Не дождались новой таблицы для предмета «" + option.label + "» за 60 секунд.");
       signal.throwIfAborted();
-      await save(target ? {...journal, group: target.name} : journal);
+      await save(target ? {...journal, group: target.name} : journal, autoStarted);
       auto.saved++;
     }
     auto.message = "Автосбор завершён.";
@@ -388,23 +427,35 @@
     if (message.type !== "collectorStatus") return;
     if (message.manual !== undefined && !auto.running) {
       manual = message.manual;
+      manualStarted = Date.now();
+      lastSent = undefined;
       candidate = undefined;
     }
     if (message.stopAuto) controller?.abort();
     if (message.catalog && !auto.running && !readingGroups) {
       readingGroups = true;
       catalogMessage = "Ожидание списка групп…";
-      collectGroups().then((result) => { catalogMessage = result; })
-        .catch((error) => { catalogMessage = error.message; })
-        .finally(() => { readingGroups = false; });
+      catalogController = new AbortController();
+      collectGroups(catalogController.signal, Date.now()).then((result) => { catalogMessage = result; })
+        .catch((error) => { catalogMessage = catalogController.signal.aborted ? "Сбор списка групп остановлен." : error.message; })
+        .finally(() => { readingGroups = false; catalogController = undefined; });
     }
-    if ((message.startAuto || message.markedGroups?.length) && !auto.running && !readingGroups) {
+    if ((message.startAuto || message.markedGroups?.length || message.applyDates) && !auto.running && !readingGroups) {
       manual = false;
       controller = new AbortController();
-      auto = {running: true, saved: 0, total: 0, message: "Ожидание списка предметов…"};
+      autoStarted = Date.now();
+      auto = {running: true, saved: 0, total: 0, message: message.range ? "Применяем даты…" : "Ожидание списка предметов…"};
       const {signal} = controller;
-      const run = message.markedGroups?.length ? collectMarked(message.markedGroups, signal) : collectGroup(signal);
-      run.catch((error) => {
+      async function run() {
+        if (message.markedGroups?.length) {
+          await collectMarked(message.markedGroups, signal, message.range);
+          return;
+        }
+        await applyDates(message.range, signal);
+        if (message.applyDates) auto.message = "Диапазон дат применён. Можно выбирать группу.";
+        else await collectGroup(signal);
+      }
+      run().catch((error) => {
         auto.message = signal.aborted ? "Автосбор остановлен." : error.message;
       }).finally(() => {
         auto.running = false;
@@ -415,6 +466,13 @@
     reply({running: manual, auto, readingGroups, catalogMessage});
   }
 
+  chrome.storage?.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes["dashboard:cleared-at"]) return;
+    manual = false;
+    candidate = lastSent = undefined;
+    controller?.abort();
+    catalogController?.abort();
+  });
   globalThis.collegeJournalCollector = true;
   chrome.runtime.onMessage.addListener(handleMessage);
   timer = setInterval(scan, 350);

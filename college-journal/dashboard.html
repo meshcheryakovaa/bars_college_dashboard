@@ -6,6 +6,7 @@
   <title>Дашборд журналов колледжа</title>
   <link rel="stylesheet" href="dashboard.css">
   <script defer src="catalog.js"></script>
+  <script defer src="date-range.js"></script>
   <script defer src="dashboard.js"></script>
   <script defer src="catalog-file.js"></script>
 </head>
@@ -19,6 +20,11 @@
     </header>
 
     <section class="tools" aria-label="Управление сбором">
+      <div class="date-tools">
+        <label>С <input id="date-from" type="date" required></label>
+        <label>По <input id="date-to" type="date" required></label>
+        <button type="button" id="apply-dates">Применить даты в журнале</button>
+      </div>
       <div class="actions">
         <button type="button" id="read-groups">Считать список групп</button>
         <button type="button" id="collect-marked" disabled>Собрать отмеченные группы</button>
@@ -29,8 +35,10 @@
       <div class="actions">
         <button type="button" id="connect-file">Сохранить БД в папку расширения</button>
         <button type="button" id="download-file">Скачать БД</button>
+        <button type="button" id="clear-dashboard">Очистить базу дашборда</button>
       </div>
       <p id="file-status" class="muted" role="status"></p>
+      <p id="clear-status" class="muted" role="status"></p>
     </section>
 
     <dl class="summary" aria-label="Сводка по выбранным данным">

@@ -18,7 +18,8 @@ let loaded = false;
 let context;
 
 const groupColumns = (group) => [group.name, group.period];
-const journalColumns = (journal) => [journal.group, journal.subject, journal.period];
+const journalType = (journal) => journal.kind === "practical" ? "Практический" : "Теоретический";
+const journalColumns = (journal) => [journal.group, journal.subject, journal.period, journalType(journal)];
 const journalViews = new Set(["journals", "lessons"]);
 const views = {
   groups: {
@@ -50,7 +51,7 @@ const views = {
   },
   journals: {
     title: "Журналы",
-    headers: ["Группа", "Предмет", "Учебный период", "Студентов", "Занятий", "Последний сбор"],
+    headers: ["Группа", "Предмет", "Учебный период", "Тип журнала", "Студентов", "Занятий", "Последний сбор"],
     placeholder: "Предмет, группа или учебный период",
     rows: ({journals}) => journals.map((item) => [
       ...journalColumns(item), item.students.length, item.lessons.length, formatTime(item.savedAt)
@@ -58,7 +59,7 @@ const views = {
   },
   lessons: {
     title: "Занятия",
-    headers: ["№ занятия", "Дата", "ID занятия", "Группа", "Предмет", "Учебный период"],
+    headers: ["№ занятия", "Дата", "ID занятия", "Группа", "Предмет", "Учебный период", "Тип журнала"],
     placeholder: "Дата, ID, предмет или группа",
     rows: ({journals}) => journals.flatMap((journal) => journal.lessons.map((item) =>
       [item.number, item.date, item.id, ...journalColumns(journal)]
@@ -99,7 +100,7 @@ function renderSummary() {
     }
     for (const {id} of journal.lessons) lessonIds.add(JSON.stringify([journal.origin, id]));
     subjectNames.add(journal.subject);
-    const label = [journal.subject, journal.group, journal.period].filter(Boolean).join(" · ");
+    const label = [journal.subject, journal.group, journal.period, journalType(journal)].filter(Boolean).join(" · ");
     options.push(makeOption(key, label));
   }
   journalFilter.replaceChildren(...options);
@@ -232,6 +233,21 @@ const readGroups = document.querySelector("#read-groups");
 const collectGroup = document.querySelector("#collect-group");
 const collectMarked = document.querySelector("#collect-marked");
 const openSource = document.querySelector("#open-source");
+const dateFrom = document.querySelector("#date-from");
+const dateTo = document.querySelector("#date-to");
+const applyDateButton = document.querySelector("#apply-dates");
+const clearButton = document.querySelector("#clear-dashboard");
+const clearStatus = document.querySelector("#clear-status");
+const defaults = dateRange();
+dateFrom.value = defaults.from;
+dateTo.value = defaults.to;
+chrome.storage.local.get(rangeKey).then((stored) => {
+  const range = dateRange(stored[rangeKey]);
+  if (!validRange(range) || dateFrom.value !== defaults.from || dateTo.value !== defaults.to) return;
+  dateFrom.value = range.from;
+  dateTo.value = range.to;
+}).catch(() => {});
+
 const source = new URLSearchParams(location.search).get("sourceTab");
 const sourceTab = /^\d+$/.test(source ?? "") ? Number(source) : undefined;
 let sourceBusy = false;
@@ -264,6 +280,7 @@ function showSource(state) {
   updateMarkedButton();
   readGroups.disabled = sourceBusy || sourceTab === undefined || sourceRun || Boolean(state?.readingGroups);
   collectGroup.disabled = sourceBusy || sourceTab === undefined || readingSource || batchRun;
+  applyDateButton.disabled = sourceBusy || sourceTab === undefined || readingSource || sourceRun;
   openSource.disabled = sourceTab === undefined;
   collectGroup.textContent = sourceRun && !batchRun ? "Остановить автосбор" : "Собрать открытую группу";
   const progress = state?.auto;
@@ -274,21 +291,28 @@ function showSource(state) {
     batchText, autoText, !progress?.running && !batch ? state?.catalogMessage : null
   ].filter(Boolean).join(" · ") || (sourceTab === undefined
     ? "Откройте дашборд из меню расширения на вкладке колледжа, чтобы управлять сбором."
-    : "Раскройте список групп на сайте колледжа, затем нажмите «Считать список групп».");
+    : "Для ручного сбора сначала примените даты. Для автосбора диапазон применяется автоматически.");
 }
 
 async function operateSource(action) {
   if (sourceBusy || sourceTab === undefined) return;
   sourceBusy = true;
   sourceError = "";
-  readGroups.disabled = collectGroup.disabled = collectMarked.disabled = true;
+  readGroups.disabled = collectGroup.disabled = collectMarked.disabled = applyDateButton.disabled = true;
   let state;
   try {
     const target = {tabId: sourceTab};
-    if (action.startAuto || action.markedGroups) {
+    if (action.startAuto || action.markedGroups || action.applyDates) {
+      const range = {from: dateFrom.value, to: dateTo.value};
+      if (!validRange(range) || !dateFrom.checkValidity() || !dateTo.checkValidity()) {
+        sourceError = "Укажите обе даты. Дата начала должна быть не позднее даты окончания.";
+        return;
+      }
+      await chrome.storage.local.set({[rangeKey]: {from: range.from, to: range.to === todayIso() ? "" : range.to}});
+      action.range = range;
       await chrome.scripting.executeScript({target, world: "MAIN", files: ["journal-page.js"]});
     }
-    if (action.startAuto || action.markedGroups || action.catalog) {
+    if (action.startAuto || action.markedGroups || action.applyDates || action.catalog) {
       await chrome.scripting.executeScript({target, files: ["collector.js"]});
     }
     state = await sendSource(action);
@@ -300,6 +324,20 @@ async function operateSource(action) {
   }
 }
 
+applyDateButton.addEventListener("click", () => void operateSource({applyDates: true}));
+clearButton.addEventListener("click", async () => {
+  if (!window.confirm("Очистить локальную базу? Собранные журналы, справочники и отметки групп будут удалены.")) return;
+  clearButton.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({type: "clearDashboard"});
+    if (!result?.ok) throw new Error(result?.error || "Не удалось очистить базу.");
+    clearStatus.textContent = "Локальная база очищена.";
+  } catch (error) {
+    clearStatus.textContent = error.message;
+  } finally {
+    clearButton.disabled = false;
+  }
+});
 readGroups.addEventListener("click", () => void operateSource({catalog: true}));
 collectMarked.addEventListener("click", () => {
   if (batchRun) void operateSource({stopAuto: true});

@@ -57,6 +57,8 @@ async function operate(action, inject = false) {
   try {
     if (inject) {
       if (action.startAuto) {
+        const stored = await chrome.storage.local.get(rangeKey);
+        action.range = dateRange(stored[rangeKey]);
         await chrome.scripting.executeScript({target: {tabId}, world: "MAIN", files: ["journal-page.js"]});
       }
       await chrome.scripting.executeScript({target: {tabId}, files: ["collector.js"]});

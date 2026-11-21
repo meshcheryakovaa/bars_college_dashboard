@@ -20,11 +20,53 @@
     connection.on("requestexception", end);
   }
 
+  function dateFields(ext, fieldIds) {
+    return fieldIds.map((id) => {
+      const widget = ext.getCmp(id);
+      if (!id || widget?.getEl?.()?.dom !== document.getElementById(id)
+        || typeof widget?.getValue !== "function" || typeof widget.setValue !== "function"
+        || typeof widget.fireEvent !== "function") {
+        throw new Error("Не удалось найти поля дат журнала.");
+      }
+      return widget;
+    });
+  }
+
+  function dateValue(widget) {
+    const date = widget.getValue();
+    if (typeof date === "string") {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+      const parts = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(date);
+      return parts ? [parts[3], parts[2], parts[1]].join("-") : "";
+    }
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+    return [date.getFullYear(), date.getMonth() + 1, date.getDate()]
+      .map((part) => String(part).padStart(2, "0")).join("-");
+  }
+
+  function localDate(iso) {
+    const [year, month, day] = iso.split("-").map(Number);
+    return new Date(year, month - 1, day);
+  }
+
   function command({action, fieldId, option}) {
     const ext = window.Ext;
     if (!ext?.Ajax?.on) throw new Error("Интерфейс журнала ещё не загрузился.");
     track(ext.Ajax);
     if (action === "ajax") return {busy: Boolean(pending.size || ext.Ajax.isLoading?.())};
+    if (action === "dateState" || action === "setDates") {
+      const fields = dateFields(ext, option.fieldIds);
+      if (action === "setDates") {
+        const changes = fields.map((widget, i) => [widget, option.dates[i]])
+          .filter(([widget, date]) => dateValue(widget) !== date);
+        for (const [widget, date] of changes) widget.setValue(localDate(date));
+        if (fields.some((widget, i) => dateValue(widget) !== option.dates[i] || widget.isValid?.() === false)) {
+          throw new Error("Поля журнала не приняли указанный диапазон.");
+        }
+        for (const [widget, date] of changes) widget.fireEvent("select", widget, localDate(date));
+      }
+      return {dates: fields.map(dateValue)};
+    }
     const field = document.getElementById(fieldId);
     const combo = ext.getCmp(fieldId);
     const store = combo?.getStore?.();

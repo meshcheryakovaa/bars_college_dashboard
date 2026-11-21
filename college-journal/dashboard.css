@@ -81,3 +81,10 @@ input[type="checkbox"] { width: auto; margin: 0 4px 0 0; accent-color: var(--acc
   .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 #collect-marked:not(:disabled) { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.date-tools { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.date-tools button { border-color: var(--border); }
+.date-tools button:disabled, #clear-dashboard:disabled { opacity: .5; cursor: default; }
+#clear-dashboard { color: #932a32; border-color: #dfc1c4; }
+#clear-dashboard:hover:not(:disabled) { background: #fff3f4; }
+.tools p:empty { display: none; }

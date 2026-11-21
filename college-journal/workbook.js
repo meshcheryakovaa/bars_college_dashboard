@@ -23,22 +23,23 @@ function worksheet(rows) {
     <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
   </sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/>
   <cols><col min="1" max="2" width="16" customWidth="1"/><col min="3" max="3" width="25" customWidth="1"/>
-  <col min="4" max="4" width="42" customWidth="1"/><col min="5" max="8" width="22" customWidth="1"/></cols>
+  <col min="4" max="4" width="42" customWidth="1"/><col min="5" max="9" width="22" customWidth="1"/></cols>
   <sheetData>${body}</sheetData></worksheet>`;
 }
 
 async function makeWorkbook(records) {
-  const journals = [["Журнал", "Учебный период", "Группа (подсказка)", "Предмет", "Студентов", "Занятий", "Сайт", "Считано"]];
+  const journals = [["Журнал", "Учебный период", "Группа (подсказка)", "Предмет", "Студентов", "Занятий", "Сайт", "Считано", "Тип журнала"]];
   const students = [["Журнал", "Учебный период", "Группа (подсказка)", "Предмет", "№ по списку", "ID студента", "Ф. И. О."]];
-  const lessons = [["Журнал", "Учебный период", "Группа (подсказка)", "Предмет", "№ занятия", "Дата", "ID занятия"]];
+  const lessons = [["Журнал", "Учебный период", "Группа (подсказка)", "Предмет", "№ занятия", "Дата", "ID занятия", "Тип журнала"]];
   records.forEach((record, index) => {
     const context = [index + 1, record.period, record.group, record.subject];
-    journals.push([...context, record.students.length, record.lessons.length, record.origin, record.savedAt]);
+    const type = record.kind === "practical" ? "Практический" : "Теоретический";
+    journals.push([...context, record.students.length, record.lessons.length, record.origin, record.savedAt, type]);
     for (const student of record.students) {
       students.push([...context, student.number, student.id, student.name]);
     }
     for (const lesson of record.lessons) {
-      lessons.push([...context, lesson.number, lesson.date, lesson.id]);
+      lessons.push([...context, lesson.number, lesson.date, lesson.id, type]);
     }
   });
   const sheets = [["Журналы", journals], ["Студенты", students], ["Занятия", lessons]];
