@@ -270,7 +270,7 @@ function markedGroups() {
 function updateMarkedButton() {
   collectMarked.disabled = sourceBusy || sourceTab === undefined || readingSource
     || (sourceRun ? !batchRun : !markedGroups().length);
-  collectMarked.textContent = batchRun ? "Остановить сбор групп" : "Собрать отмеченные группы";
+  collectMarked.textContent = batchRun ? "Остановить сбор групп" : "Собрать отмеченные группы в обоих журналах";
 }
 
 function showSource(state) {
@@ -286,7 +286,7 @@ function showSource(state) {
   const progress = state?.auto;
   const autoText = progress?.message && [progress.total ? `${progress.saved} из ${progress.total}.` : "", progress.message].filter(Boolean).join(" ");
   const batch = progress?.batch;
-  const batchText = batch && [`Группы: ${batch.done} из ${batch.total}`, batch.group].filter(Boolean).join(" · ");
+  const batchText = batch && [`Проходы: ${batch.done} из ${batch.total}`, batch.journal, batch.group].filter(Boolean).join(" · ");
   sourceStatus.textContent = sourceError || [
     batchText, autoText, !progress?.running && !batch ? state?.catalogMessage : null
   ].filter(Boolean).join(" · ") || (sourceTab === undefined
@@ -315,9 +315,10 @@ async function operateSource(action) {
     if (action.startAuto || action.markedGroups || action.applyDates || action.catalog) {
       await chrome.scripting.executeScript({target, files: ["collector.js"]});
     }
+    if (action.markedGroups) await chrome.tabs.update(sourceTab, {active: true});
     state = await sendSource(action);
   } catch {
-    sourceError = "Связь с журналом недоступна. Откройте дашборд заново из вкладки колледжа.";
+    sourceError = "Не удалось запустить сбор. Откройте дашборд заново из вкладки колледжа.";
   } finally {
     sourceBusy = false;
     showSource(state);
