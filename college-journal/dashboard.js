@@ -115,6 +115,7 @@ function renderSummary() {
     ? "Последний сбор журнала — " + formatTime(entries[0][1].savedAt)
     : "Собранные данные хранятся в этом профиле браузера.";
 
+  updateMarkedButton();
   context = {groups: filteredGroups, entries, unassigned: only ? [] : [...unassigned.values()], selected};
   renderTable();
 }
@@ -229,27 +230,48 @@ chrome.storage.local.get(null).then((stored) => {
 const sourceStatus = document.querySelector("#source-status");
 const readGroups = document.querySelector("#read-groups");
 const collectGroup = document.querySelector("#collect-group");
+const collectMarked = document.querySelector("#collect-marked");
 const openSource = document.querySelector("#open-source");
 const source = new URLSearchParams(location.search).get("sourceTab");
 const sourceTab = /^\d+$/.test(source ?? "") ? Number(source) : undefined;
 let sourceBusy = false;
 let sourceRun = false;
+let batchRun = false;
+let readingSource = false;
 let sourceError = "";
 
 function sendSource(action) {
   return chrome.tabs.sendMessage(sourceTab, {type: "collectorStatus", ...action});
 }
 
+function markedGroups() {
+  const {groups, selected} = catalogFromStorage(storageState);
+  return [...groups.values()].filter(({key}) => selected.has(key))
+    .sort((a, b) => a.name.localeCompare(b.name, "ru", {numeric: true}))
+    .map(({origin, period, name}) => ({origin, period, name}));
+}
+
+function updateMarkedButton() {
+  collectMarked.disabled = sourceBusy || sourceTab === undefined || readingSource
+    || (sourceRun ? !batchRun : !markedGroups().length);
+  collectMarked.textContent = batchRun ? "Остановить сбор групп" : "Собрать отмеченные группы";
+}
+
 function showSource(state) {
   sourceRun = Boolean(state?.auto?.running);
+  batchRun = sourceRun && Boolean(state?.auto?.batch);
+  readingSource = Boolean(state?.readingGroups);
+  updateMarkedButton();
   readGroups.disabled = sourceBusy || sourceTab === undefined || sourceRun || Boolean(state?.readingGroups);
-  collectGroup.disabled = sourceBusy || sourceTab === undefined || Boolean(state?.readingGroups);
+  collectGroup.disabled = sourceBusy || sourceTab === undefined || readingSource || batchRun;
   openSource.disabled = sourceTab === undefined;
-  collectGroup.textContent = sourceRun ? "Остановить автосбор" : "Собрать открытую группу";
+  collectGroup.textContent = sourceRun && !batchRun ? "Остановить автосбор" : "Собрать открытую группу";
   const progress = state?.auto;
   const autoText = progress?.message && [progress.total ? `${progress.saved} из ${progress.total}.` : "", progress.message].filter(Boolean).join(" ");
+  const batch = progress?.batch;
+  const batchText = batch && [`Группы: ${batch.done} из ${batch.total}`, batch.group].filter(Boolean).join(" · ");
   sourceStatus.textContent = sourceError || [
-    state?.catalogMessage, autoText
+    batchText, autoText, !progress?.running && !batch ? state?.catalogMessage : null
   ].filter(Boolean).join(" · ") || (sourceTab === undefined
     ? "Откройте дашборд из меню расширения на вкладке колледжа, чтобы управлять сбором."
     : "Раскройте список групп на сайте колледжа, затем нажмите «Считать список групп».");
@@ -259,14 +281,14 @@ async function operateSource(action) {
   if (sourceBusy || sourceTab === undefined) return;
   sourceBusy = true;
   sourceError = "";
-  readGroups.disabled = collectGroup.disabled = true;
+  readGroups.disabled = collectGroup.disabled = collectMarked.disabled = true;
   let state;
   try {
     const target = {tabId: sourceTab};
-    if (action.startAuto) {
+    if (action.startAuto || action.markedGroups) {
       await chrome.scripting.executeScript({target, world: "MAIN", files: ["journal-page.js"]});
     }
-    if (action.startAuto || action.catalog) {
+    if (action.startAuto || action.markedGroups || action.catalog) {
       await chrome.scripting.executeScript({target, files: ["collector.js"]});
     }
     state = await sendSource(action);
@@ -279,6 +301,13 @@ async function operateSource(action) {
 }
 
 readGroups.addEventListener("click", () => void operateSource({catalog: true}));
+collectMarked.addEventListener("click", () => {
+  if (batchRun) void operateSource({stopAuto: true});
+  else {
+    const groups = markedGroups();
+    if (groups.length) void operateSource({markedGroups: groups});
+  }
+});
 collectGroup.addEventListener("click", () => void operateSource(sourceRun ? {stopAuto: true} : {startAuto: true}));
 openSource.addEventListener("click", async () => {
   try {

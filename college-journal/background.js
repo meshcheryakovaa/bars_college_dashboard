@@ -2,13 +2,24 @@ importScripts("catalog.js");
 
 let pending = Promise.resolve();
 
+async function journalId(identity) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(identity)));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 async function saveJournal(journal, tabId) {
+  const {origin, period, subject, group} = journal;
   const ids = journal.students.map(({id}) => id).sort();
-  const identity = JSON.stringify([journal.origin, journal.period, journal.subject, ids]);
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(identity));
-  const id = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-  const key = "journal:" + id;
-  const previous = (await chrome.storage.local.get(key))[key];
+  const identity = [origin, period, subject, ids];
+  let id = await journalId(identity);
+  let key = "journal:" + id;
+  let previous = (await chrome.storage.local.get(key))[key];
+  // Keep existing keys and separate otherwise identical journals in known different groups.
+  if (group && previous?.group && groupKey(origin, period, group) !== groupKey(origin, period, previous.group)) {
+    id = await journalId([...identity, groupKey(origin, period, group)]);
+    key = "journal:" + id;
+    previous = (await chrome.storage.local.get(key))[key];
+  }
   const lessons = new Map((previous?.lessons ?? []).map((lesson) => [lesson.id, lesson]));
   for (const lesson of journal.lessons) lessons.set(lesson.id, lesson);
   const record = {

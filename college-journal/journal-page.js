@@ -23,14 +23,15 @@
   function command({action, fieldId, option}) {
     const ext = window.Ext;
     if (!ext?.Ajax?.on) throw new Error("Интерфейс журнала ещё не загрузился.");
+    track(ext.Ajax);
+    if (action === "ajax") return {busy: Boolean(pending.size || ext.Ajax.isLoading?.())};
     const field = document.getElementById(fieldId);
     const combo = ext.getCmp(fieldId);
     const store = combo?.getStore?.();
     if (!field || combo?.getEl?.()?.dom !== field || !store?.getRange
       || typeof combo.onSelect !== "function" || typeof combo.onTriggerClick !== "function") {
-      throw new Error("Не удалось определить список предметов в этом журнале.");
+      throw new Error("Не удалось определить выпадающий список по полю.");
     }
-    track(ext.Ajax);
 
     const busy = Boolean(pending.size || ext.Ajax.isLoading?.() || store.loading || combo.loading);
     if (action === "state") {
@@ -56,6 +57,7 @@
       return {
         busy,
         expanded: combo.isExpanded(),
+        listId: combo.innerList?.dom?.id,
         rendered: combo.view?.getNodes?.().length ?? null,
         total: store.getTotalCount?.() ?? items.length,
         items
@@ -63,7 +65,8 @@
     }
     if (action === "select") {
       const index = items.findIndex(({value, label}) => value === option.value && label === option.label);
-      if (index < 0 || busy) throw new Error("Список предметов изменился. Запустите сбор снова.");
+      if (index < 0 || busy) throw new Error("Выпадающий список изменился. Запустите сбор снова.");
+      if (option.activateItem) combo.select?.(index, false);
       combo.onSelect(records[index], index);
       return {};
     }

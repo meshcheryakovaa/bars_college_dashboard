@@ -39,7 +39,9 @@ function showMode(state) {
   autoButton.textContent = autoRunning ? "Остановить автосбор" : "Собрать журналы группы";
   const progress = state?.auto;
   const count = progress?.total ? `${progress.saved} из ${progress.total}. ` : "";
-  autoStatus.textContent = progress?.message ? count + progress.message : "";
+  const batch = progress?.batch;
+  const prefix = batch ? `Группы: ${batch.done} из ${batch.total}. ${batch.group ? batch.group + ". " : ""}` : "";
+  autoStatus.textContent = progress?.message ? prefix + count + progress.message : "";
   toggle.disabled = busy || autoRunning || tabId === undefined;
   autoButton.disabled = busy || tabId === undefined;
 }
