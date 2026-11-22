@@ -147,7 +147,7 @@
   let catalogController;
 
   async function scan() {
-    if (!manual || sending || auto.running) return;
+    if (!manual || sending || auto.running || navigating) return;
 
     const journal = readPage();
     if (!journal) {
@@ -608,7 +608,7 @@
       candidate = undefined;
     }
     if (message.stopAuto) controller?.abort();
-    if (message.catalog && !auto.running && !readingGroups) {
+    if (message.catalog && !auto.running && !readingGroups && !navigating) {
       readingGroups = true;
       catalogMessage = "Ожидание списка групп…";
       catalogController = new AbortController();
@@ -616,7 +616,7 @@
         .catch((error) => { catalogMessage = catalogController.signal.aborted ? "Сбор списка групп остановлен." : error.message; })
         .finally(() => { readingGroups = false; catalogController = undefined; });
     }
-    if ((message.startAuto || message.markedGroups?.length || message.applyDates) && !auto.running && !readingGroups) {
+    if ((message.startAuto || message.markedGroups?.length || message.applyDates) && !auto.running && !readingGroups && !navigating) {
       manual = false;
       controller = new AbortController();
       autoStarted = Date.now();
