@@ -183,10 +183,12 @@
     } else {
       throw new Error("В окне несколько КТП без однозначного соответствия дисциплине. Выберите КТП вручную, затем повторите привязку.");
     }
+    const originalRows = new Map(current.rows.map((row) => [row, clean(row.textContent)]));
     const targetRows = await until(() => {
       const now = modalRows(info);
       if (!now) return null;
-      const found = now.rows.filter((row) => rowNumberMatch(row, n));
+      const found = now.rows.filter((row) => rowNumberMatch(row, n)
+        && (!originalRows.has(row) || originalRows.get(row) !== clean(row.textContent)));
       if (found.length !== 1) return null;
       const activated = net.entries.some((item) => item.path.endsWith("/rowsactionforctpbinding"));
       return activated ? {win: now.win, row: found[0]} : null;
