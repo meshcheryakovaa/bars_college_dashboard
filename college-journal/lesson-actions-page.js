@@ -1,7 +1,7 @@
 /* Запись через штатные Ext JS обработчики БАРС, без прямых запросов к API. */
 (() => {
   "use strict";
-  if (window.__barsLessonActions?.version === 3) return;
+  if (window.__barsLessonActions?.version === 4) return;
   const clean = (x) => String(x ?? "").replace(/\s+/g, " ").trim();
   const shown = (x) => Boolean(x?.isConnected && x.getClientRects().length);
   const cells = (row) => [...row.querySelectorAll("td.x-grid3-cell")];
@@ -343,6 +343,76 @@
         + (verified ? "" : " Проверьте оценки в БАРС перед подтверждением.")
     };
   }
+
+  // Достоверное чтение состояния конкретного занятия по его уникальному ID.
+  // При отсутствии в БАРС явного поля номера КТП возвращаем unknown,
+  // а не выводим успех по HTTP 200 или по локальным отметкам.
+  function readBoundKtp(info) {
+    const found = new Set();
+    const exact = /^(?:data-)?(?:ctp|ktp)[-_]?(?:topic|theme)[-_]?(?:number|num|no)$/i;
+    const nodes = [info.header, ...info.header.querySelectorAll("*")];
+    for (const element of nodes) {
+      for (const attr of [...(element.attributes || [])]) {
+        if (exact.test(attr.name) && /^[1-9]\d{0,3}$/.test(attr.value)) found.add(String(Number(attr.value)));
+      }
+    }
+    // Заголовок занятия иногда содержит явную подпись: "Тема КТП № N".
+    // Не интерпретируем просто число занятия или дату как номер темы.
+    const marker = /(?:тема\s+ктп|ктп\s*[:№]\s*тема)\s*№?\s*(\d{1,4})(?!\d)/ig;
+    const label = clean(info.header.getAttribute("title")) + " " +
+      clean(info.header.getAttribute("data-qtip")) + " " + clean(info.header.textContent);
+    for (const match of label.matchAll(marker)) found.add(String(Number(match[1])));
+    return found.size === 1 ? {status: "confirmed", topic: [...found][0]}
+      : {status: "unknown", topic: null};
+  }
+
+  function currentGrades(task, info) {
+    const cmp = gridComponent(info);
+    const column = cmp && gradeColumn(info, cmp);
+    if (!column) return {status: "unknown", counts: {}};
+    const cls = "x-grid3-td-" + column.colId;
+    const values = info.rightRows.map((row) => {
+      const cell = row.querySelector("td." + cls);
+      return cell && shown(cell) ? clean(cell.textContent) : null;
+    });
+    if (values.some((value) => value === null)) return {status: "unknown", counts: {}};
+    const blanks = values.filter((value) => value === "" || value === "—" || value === "-").length;
+    const others = values.filter((value) => value !== "" && value !== "—" && value !== "-" &&
+      value !== "3").length;
+    const valid = values.filter((value) => /^[2-5]$/.test(value)).length;
+    return {status: blanks === 0 && valid === values.length ? "complete"
+      : blanks ? "incomplete" : "unknown",
+      counts: {total: values.length, empty: blanks, nonThree: others,
+        threes: values.filter((value) => value === "3").length}, values};
+  }
+
+  async function inspectState(task, info, net, refresh = false) {
+    if (refresh) {
+      const checkpoint = net.entries.length;
+      button(info.win, "refresh_btn").click();
+      await net.completed("lessons_tab_rows", checkpoint, 16000);
+    }
+    let current = scope(task);
+    selectLesson(current);
+    await sleep(400);
+    current = scope(task);
+    const closeNode = current.win.querySelector("#close_lesson_btn");
+    const reopenNode = current.win.querySelector("#open_lesson_btn");
+    const isDisabled = (node) => Boolean(node && (
+      node.classList.contains("x-item-disabled") || node.querySelector("button")?.disabled));
+    let closure = "unknown";
+    if (closeNode && reopenNode) {
+      if (isDisabled(closeNode) && !isDisabled(reopenNode)) closure = "closed";
+      if (!isDisabled(closeNode) && isDisabled(reopenNode)) closure = "open";
+    }
+    return {
+      ok: true, verified: true,
+      state: {ktp: readBoundKtp(current), grades: currentGrades(task, current), closure},
+      message: "Прочитаны доступные признаки КТП, оценок и закрытия занятия № " +
+        task.number + ". Нераспознаваемые признаки оставлены в состоянии «не определено»."
+    };
+  }
+
   // BARS обновляет доступность команд закрытия с задержкой на одно
   // закрытое занятие. Отправка и проверка поэтому разделены на две операции.
   async function verifyClosed(task, info, net, refresh = false) {
@@ -401,6 +471,8 @@
       if (task.action === "check") return {ok: true, verified: true,
         message: "Сверены группа, предмет, тип журнала, дата, ID занятия и " + info.rightRows.length + " строк студентов."};
       net = ajaxTracker();
+      if (task.action === "inspect" || task.action === "inspectRefresh")
+        return inspectState(task, info, net, task.action === "inspectRefresh");
       const result = task.action === "bind" ? await bindKtp(task, info, net)
         : task.action === "grades" ? await gradeAll(task, info, net)
           : task.action === "close" ? await closeLesson(task, info, net)
@@ -416,5 +488,5 @@
       running = false;
     }
   }
-  window.__barsLessonActions = {version: 3, run, stop() {stopRequested = true;}};
+  window.__barsLessonActions = {version: 4, run, stop() {stopRequested = true;}};
 })();
