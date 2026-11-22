@@ -94,7 +94,7 @@ downloadFile.addEventListener("click", async () => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && Object.keys(changes).some((key) =>
-    key.startsWith("journal:") || key.startsWith(groupPrefix) || key.startsWith(selectionPrefix) || key.startsWith("workflow:plan:")
+    key.startsWith("journal:") || key.startsWith(groupPrefix) || key.startsWith(selectionPrefix) || key.startsWith("workflow:plan:") || key.startsWith("workflow:enrollment-skip:")
   )) {
     revision++;
     void persistCatalog();
