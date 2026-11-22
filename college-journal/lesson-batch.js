@@ -75,12 +75,31 @@
     return {queue, completed, attempted, unresolved, blocked, total: lessons.length};
   }
 
+  // Возобновление после старой версии: разрешена ровно одна отложенная
+  // проверка уже ОТПРАВЛЕННОГО закрытия, перед всеми новыми занятиями.
+  // Если запрос завершился сетевой ошибкой, запись не считается отправленной.
+  function resumableClose(plan, entries = {}) {
+    if (!plan?.queue?.length || plan.blocked.length) return null;
+    const unsettled = [...plan.attempted, ...plan.unresolved];
+    if (unsettled.length !== 1) return null;
+    const candidate = unsettled[0];
+    const state = entries[String(candidate.id)] || {};
+    if (!state.closeAttempted || !state.closeNeedsReview ||
+      !/^Закрытие: (требует проверки|ожидает проверки|запрос отправлен|не подтверждено)/.test(state.lastAction || "")) {
+      return null;
+    }
+    const first = plan.queue[0];
+    const n = Number(candidate.number), f = Number(first.number);
+    if (!(Number.isFinite(n) && Number.isFinite(f) && n < f)) return null;
+    return candidate;
+  }
+
   // BARS показывает закрытие занятия на один запрос позже.
   // Отправка [A, B, C] и проверки: close(A), close(B), verify(A),
   // close(C), verify(B), refresh+verify(C). Последний может остаться
   // неподтверждённым — его НЕЛЬЗЯ повторно закрывать автоматически.
   async function runDelayedClose(queue, hooks) {
-    let submitted = 0, verified = 0, previous = null, reason = "";
+    let submitted = 0, verified = 0, previous = hooks.initialPending || null, reason = "";
     for (const lesson of queue) {
       if (hooks.stopped()) {
         reason = "Операция остановлена пользователем.";
@@ -150,5 +169,5 @@
     }
     return {submitted, verified, pending: previous, reason};
   }
-  globalThis.collegeLessonBatch = Object.freeze({prepare, prepareGrades, prepareClose, runDelayedClose});
+  globalThis.collegeLessonBatch = Object.freeze({prepare, prepareGrades, prepareClose, resumableClose, runDelayedClose});
 })();
