@@ -7,7 +7,7 @@ const source = fs.readFileSync(path.join(__dirname, "..", "college-journal", "le
 const workflow = fs.readFileSync(path.join(__dirname, "..", "college-journal", "lesson-workflow.js"), "utf8");
 const html = fs.readFileSync(path.join(__dirname, "..", "college-journal", "dashboard.html"), "utf8");
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "college-journal", "manifest.json"), "utf8"));
-assert.equal(manifest.version, "1.11.0");
+assert.equal(manifest.version, "1.12.0");
 assert(!/\bfetch\s*\(|new\s+XMLHttpRequest|Ext\.Ajax\.request/.test(source),
   "Page automation must not send direct requests");
 assert(html.includes('src="lesson-actions-page.js"') === false,
@@ -29,7 +29,7 @@ const context = {
   setTimeout
 };
 vm.runInNewContext(source, context, {filename: "lesson-actions-page.js"});
-assert.equal(window.__barsLessonActions.version, 3);
+assert.equal(window.__barsLessonActions.version, 4);
 
 (async () => {
   const badOrigin = await window.__barsLessonActions.run({
