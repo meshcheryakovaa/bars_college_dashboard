@@ -28,5 +28,51 @@
     }
     return {queue, missing, unresolved, attempted, linked, total: lessons.length};
   }
-  globalThis.collegeLessonBatch = Object.freeze({prepare});
+
+  // Shared validation ensures all write queues refer to distinct, stable lesson IDs.
+  function validatedLessons(journal) {
+    const lessons = [...(journal?.lessons || [])].sort(byLesson);
+    const ids = lessons.map((lesson) => String(lesson.id));
+    if (lessons.some((lesson) => lesson.id == null || String(lesson.id).trim() === "")
+      || new Set(ids).size !== lessons.length) {
+      throw new Error("Обнаружены отсутствующие или повторяющиеся ID занятий. Обновите сбор журнала.");
+    }
+    return lessons;
+  }
+  function prepareGrades(journal, entries = {}) {
+    const queue = [], completed = [], attempted = [], unresolved = [], closed = [];
+    const lessons = validatedLessons(journal);
+    for (const lesson of lessons) {
+      const state = entries[String(lesson.id)] || {};
+      if (state.closed) {closed.push(lesson); continue;}
+      if (state.graded) {completed.push(lesson); continue;}
+      if (state.gradeNeedsReview) {unresolved.push(lesson); continue;}
+      if (state.gradeAttempted || /^Оценки:/.test(state.lastAction || "")) {
+        attempted.push(lesson);
+        continue;
+      }
+      queue.push(lesson);
+    }
+    return {queue, completed, attempted, unresolved, closed, total: lessons.length};
+  }
+  function prepareClose(journal, entries = {}) {
+    const queue = [], completed = [], attempted = [], unresolved = [], blocked = [];
+    const lessons = validatedLessons(journal);
+    for (const lesson of lessons) {
+      const state = entries[String(lesson.id)] || {};
+      if (state.closed) {completed.push(lesson); continue;}
+      if (state.closeNeedsReview) {unresolved.push(lesson); continue;}
+      if (state.closeAttempted || /^Закрытие:/.test(state.lastAction || "")) {
+        attempted.push(lesson);
+        continue;
+      }
+      if (!state.linked || !state.graded) {
+        blocked.push({lesson, needsKtp: !state.linked, needsGrades: !state.graded});
+        continue;
+      }
+      queue.push(lesson);
+    }
+    return {queue, completed, attempted, unresolved, blocked, total: lessons.length};
+  }
+  globalThis.collegeLessonBatch = Object.freeze({prepare, prepareGrades, prepareClose});
 })();
