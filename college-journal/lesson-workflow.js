@@ -239,6 +239,8 @@
         }, actionBusy));
       }
       if (!state.closed && (state.closeAttempted || state.closeNeedsReview || /^Закрытие:/.test(state.lastAction || ""))) {
+        actions.append(button("Проверить закрытие", () =>
+          void runLessonAction(journal, lesson, "verifyCloseFinal"), actionBusy || sourceTabId === null));
         actions.append(button("Разрешить повтор закрытия", () => {
           if (!window.confirm("Проверьте состояние занятия № " + lesson.number + " (" + lesson.date +
             ") в БАРС. Разрешить повторный вызов закрытия только если занятие ещё открыто?")) return;
@@ -427,7 +429,9 @@
       " без переключения вкладок. Не изменяйте открытый журнал БАРС.");
     try {
       const result = await executeLessonOperation(journal, lesson, action);
-      const saved = await saveActionOutcome(lesson, action, result);
+      const saved = action === "verifyCloseFinal"
+        ? (!result.ok || !result.verified ? true : await saveActionOutcome(lesson, "close", result))
+        : await saveActionOutcome(lesson, action, result);
       message((result.ok ? "" : "Не выполнено: ") + result.message +
         (!saved ? " Изменение локального плана не сохранилось." : ""), !result.ok || !saved);
     } catch (error) {
@@ -474,6 +478,10 @@
       ". Неясный результат предыдущих операций: " + plan.unresolved.length + ".\n\n" +
       "Вкладка с дашбордом останется активной. Очередь остановится при первой ошибке.";
     if (!window.confirm(prompt)) return;
+    if (!grading) {
+      await runBatchDelayedClose(journal, plan, label);
+      return;
+    }
 
     actionBusy = true;
     stopRequested = false;
@@ -543,6 +551,80 @@
 
   batchBindButton.addEventListener("click", () => void runBatchBinding());
 
+  async function runBatchDelayedClose(journal, plan, label) {
+    actionBusy = true;
+    stopRequested = false;
+    batchStatus = {
+      completed: 0, total: plan.queue.length,
+      text: "Закрытие: отправлено 0 из " + plan.queue.length + ", проверено 0."
+    };
+    renderRows();
+    try {
+      const result = await collegeLessonBatch.runDelayedClose(plan.queue, {
+        stopped: () => stopRequested,
+        async beforeSubmit(lesson, {submitted}) {
+          const id = String(lesson.id);
+          batchStatus.text = "Отправляем закрытие " + (submitted + 1) + " из " +
+            plan.queue.length + ": занятие № " + lesson.number + " (" + lesson.date + ").";
+          renderBatchProgress();
+          return storeState(id, {
+            closeAttempted: true, closeNeedsReview: true,
+            lastAction: "Закрытие: ожидает проверки после следующего занятия",
+            lastActionAt: new Date().toISOString()
+          });
+        },
+        submit: (lesson) => executeLessonOperation(journal, lesson, "closeBatch"),
+        onSubmitted: (lesson) => storeState(String(lesson.id), {
+          closeAttempted: true, closeNeedsReview: true,
+          lastAction: "Закрытие: запрос отправлен, ждём проверки",
+          lastActionAt: new Date().toISOString()
+        }),
+        verify: (lesson, final) => executeLessonOperation(journal, lesson,
+          final ? "verifyCloseFinal" : "verifyClose"),
+        onVerified: (lesson, check) => saveActionOutcome(lesson, "close", check),
+        onUnverified: (lesson, check) => storeState(String(lesson.id), {
+          closeAttempted: true, closeNeedsReview: true,
+          lastAction: "Закрытие: не подтверждено, проверьте в БАРС",
+          lastActionAt: new Date().toISOString()
+        }),
+        onError: (lesson, error) => storeState(String(lesson.id), {
+          closeAttempted: true, closeNeedsReview: true,
+          lastAction: "Закрытие: неизвестный результат, проверьте в БАРС",
+          lastActionAt: new Date().toISOString()
+        }),
+        async progress({submitted, verified, previous}) {
+          batchStatus.completed = verified;
+          batchStatus.text = "Закрытие: отправлено " + submitted + " из " +
+            plan.queue.length + ", подтверждено " + verified +
+            ". Занятие № " + previous.number + " ожидает следующего закрытия.";
+          renderRows();
+          message(batchStatus.text);
+        }
+      });
+      batchStatus.completed = result.verified;
+      const prefix = "Закрытие: отправлено " + result.submitted + " из " +
+        plan.queue.length + ", подтверждено " + result.verified + ". ";
+      const final = result.reason
+        ? "Очередь остановлена: " + result.reason +
+          " Непроверенные занятия не будут отправлены повторно автоматически."
+        : result.pending
+          ? "Последнее занятие № " + result.pending.number + " (" +
+            result.pending.date + ") пока не подтверждено. Откройте БАРС и нажмите " +
+            "«Проверить закрытие» в этой строке после обновления статуса."
+          : "Все отправленные закрытия подтверждены интерфейсом БАРС.";
+      batchStatus.text = prefix + final;
+      message(batchStatus.text, Boolean(result.reason));
+    } catch (error) {
+      batchStatus.text = "Ошибка пакетного закрытия: " + error.message +
+        ". Ранее отправленные занятия нужно проверить вручную.";
+      message(batchStatus.text, true);
+    } finally {
+      actionBusy = false;
+      stopRequested = false;
+      renderRows();
+    }
+  }
+
   async function runBatchWrite(action) {
     if (actionBusy) return;
     const journal = current();
@@ -590,7 +672,9 @@
       ". " + excluded + "Ранее отправлялось или требует проверки: " +
       (plan.attempted.length + plan.unresolved.length) + ".\n\n" +
       "Действия выполняются по очереди без переключения вкладки. " +
-      "При ошибке или неподтверждённом результате выполнение остановится.";
+      (grading ? "При ошибке или неподтверждённом результате выполнение остановится."
+        : "После каждого следующего закрытия будет проверено предыдущее занятие. " +
+          "Последнее будет повторно проверено после обновления журнала; оно может остаться неподтверждённым.");
     if (!window.confirm(prompt)) return;
 
     actionBusy = true;
