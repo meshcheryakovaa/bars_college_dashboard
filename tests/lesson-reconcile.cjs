@@ -43,6 +43,16 @@ assert.equal(unknown.safe, false,
   "Unknown response must never be treated as a successful write.");
 assert(unknown.issues.length >= 2);
 
+const partiallyGraded = reconcile({ok: true, state: {
+  ktp: {status: "confirmed", topic: "7"},
+  grades: {status: "incomplete", counts: {total: 3, empty: 1, threes: 1, nonThree: 1}},
+  closure: "open"
+}}, {ktpNumber: "7", bindAttempted: true, gradeAttempted: true});
+assert.equal(partiallyGraded.patch.gradeAttempted, false,
+  "After readback proves a missing grade, reapplying only blank cells is safe.");
+assert.equal(partiallyGraded.patch.gradeNeedsReview, false);
+assert.equal(partiallyGraded.patch.linked, true);
+
 const conflict = reconcile({ok: true, state: {
   ktp: {status: "confirmed", topic: "8"},
   grades: {status: "complete"},
