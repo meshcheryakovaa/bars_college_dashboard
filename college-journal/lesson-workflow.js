@@ -7,6 +7,8 @@
   const status = document.querySelector("#workflow-status");
   const summary = document.querySelector("#workflow-summary");
   const numberAll = document.querySelector("#workflow-number-all");
+  const ktpStart = document.querySelector("#workflow-ktp-start");
+  const fullDatesButton = document.querySelector("#workflow-fill-dates");
   const batchBindButton = document.querySelector("#workflow-bind-all");
   const batchGradesButton = document.querySelector("#workflow-grades-all");
   const batchCloseButton = document.querySelector("#workflow-close-all");
@@ -128,6 +130,8 @@
     batchBindButton.disabled = actionBusy || !journal || sourceTabId === null;
     batchGradesButton.disabled = actionBusy || !journal || sourceTabId === null;
     batchCloseButton.disabled = actionBusy || !journal || sourceTabId === null;
+    fullDatesButton.disabled = actionBusy || !journal || sourceTabId === null;
+    ktpStart.disabled = actionBusy || !journal;
     if (!journal) {
       summary.textContent = "Выберите собранный журнал.";
       numberAll.disabled = resetPlan.disabled = true;
@@ -268,6 +272,13 @@
       if (current()?.key !== journal.key) return;
       plans = (saved[keyFor(selectedKey)] || saved[prefix + selectedKey])?.entries || {};
     }
+    if (journal) {
+      try {
+        const first = collegeLessonBatch.lessonsByDate(journal)[0];
+        const suggested = first && plans[String(first.id)]?.ktpNumber;
+        if (suggested) ktpStart.value = suggested;
+      } catch { /* Недопустимые даты обрабатываются при заполнении. */ }
+    }
     renderRows();
   }
   async function refresh() {
@@ -294,24 +305,66 @@
   });
   journalSelect.addEventListener("change", () => {
     selectedKey = journalSelect.value;
+    ktpStart.value = "";
     batchStatus = null;
     renderBatchProgress();
     void loadPlan();
   });
-  numberAll.addEventListener("click", async () => {
+  async function applySequentialKtp(confirmOverwrite = true) {
+    if (actionBusy) return false;
     const journal = current();
-    if (!journal || !window.confirm("Заполнить пустые № КТП номерами занятий? Существующие номера сохранятся. Привязка на сайте не выполняется.")) return;
-    let affected = 0;
-    for (const lesson of journal.lessons) {
-      const id = String(lesson.id), state = stateFor(id);
-      if (!state.ktpNumber && validNumber(String(lesson.number)) && String(lesson.number)) {
-        plans[id] = {...state, ktpNumber: String(Number(lesson.number))};
-        affected++;
-      }
+    if (!journal) return false;
+    let assignment;
+    try {
+      assignment = collegeLessonBatch.assignKtpSequence(journal, ktpStart.value);
+    } catch (error) {
+      message(error.message, true);
+      return false;
     }
-    await persist();
+    const conflicts = assignment.filter(({lesson, ktpNumber}) => {
+      const state = stateFor(String(lesson.id));
+      return state.ktpNumber && String(state.ktpNumber) !== ktpNumber &&
+        (state.linked || state.bindAttempted || state.bindNeedsReview ||
+          state.graded || state.gradeAttempted || state.gradeNeedsReview ||
+          state.closed || state.closeAttempted || state.closeNeedsReview);
+    });
+    if (conflicts.length) {
+      message("Номера КТП не изменены: " + conflicts.length +
+        " занятий уже имеют выполненные или отправленные действия с другими номерами (" +
+        conflicts.slice(0, 5).map(({lesson}) => "№ " + lesson.number +
+          " / " + lesson.date).join(", ") + "). Проверьте их вручную.", true);
+      return false;
+    }
+    const changed = assignment.filter(({lesson, ktpNumber}) =>
+      String(stateFor(String(lesson.id)).ktpNumber || "") !== ktpNumber);
+    if (!changed.length) {
+      message("Номера тем уже расставлены по датам: " + assignment.length + ".");
+      return true;
+    }
+    if (confirmOverwrite && !window.confirm(
+      "Назначить темы КТП по хронологии: от № " + ktpStart.value + " до № " +
+      assignment[assignment.length - 1].ktpNumber + " (" + assignment.length +
+      " занятий)? Будут заменены " + changed.length + " незавершённых номеров. " +
+      "Это пока только локальный план, без записи в БАРС."
+    )) return false;
+    for (const {lesson, ktpNumber} of assignment) {
+      const id = String(lesson.id), state = stateFor(id);
+      if (String(state.ktpNumber || "") === ktpNumber) continue;
+      plans[id] = {
+        ...state, ktpNumber, linked: false, bindAttempted: false,
+        bindNeedsReview: false, lastAction: "", lastActionAt: ""
+      };
+    }
+    const saved = await persist();
     renderRows();
-    message("Заполнено номеров КТП: " + affected + ". Проверьте их перед привязкой в БАРС.");
+    message(saved ? "Назначены темы КТП: " + assignment.map(x => x.ktpNumber).join(", ") + "." :
+      "Не удалось сохранить последовательность КТП.", !saved);
+    return saved;
+  }
+
+  numberAll.addEventListener("click", () => void applySequentialKtp());
+  ktpStart.addEventListener("change", () => {
+    if (ktpStart.value.trim()) void applySequentialKtp();
   });
   resetPlan.addEventListener("click", async () => {
     if (!current() || !window.confirm("Удалить локальный план выбранного журнала? Записи БАРС не изменятся.")) return;
