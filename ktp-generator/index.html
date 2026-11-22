@@ -5,6 +5,21 @@
 <main>
 <header><div class="brand"><span>Б</span> БАРС / Учебное планирование</div>
 <h1>КТП по группам</h1><p>Заполните реквизиты группы один раз. В архив войдут два файла Excel для каждой группы — осенний и весенний.</p></header>
+<section class="catalog-import">
+  <h2>Данные из дашборда БАРС</h2>
+  <p class="hint">Импортируйте файл <code>catalog-db.json</code>, скачанный из дашборда. В файл входят группы, дисциплины и учебный период, но не личные настройки генератора.</p>
+  <div class="bar import-row">
+    <label>Каталог JSON <input id="catalog-import" type="file" accept=".json,application/json"></label>
+    <label>Дисциплина <select id="catalog-subject"><option value="">Сначала импортируйте каталог</option></select></label>
+    <button type="button" id="catalog-add" disabled>Добавить группы с этой дисциплиной</button>
+  </div>
+  <div class="bar import-row">
+    <label>Преподаватель для всех файлов <input id="common-teacher" type="text"></label>
+    <label>Дата утверждения для всех файлов <input id="common-date" type="text" placeholder="ДД.ММ.ГГГГ"></label>
+    <button type="button" id="common-apply">Применить ко всем группам</button>
+  </div>
+  <output id="import-status" aria-live="polite"></output>
+</section>
 <form id="editor">
 <section><div class="bar"><h2>Сводная таблица</h2><button id="add" type="button">+ Добавить группу</button></div>
 <p class="hint">Каждый столбец — одна группа. Новая группа наследует общие реквизиты предыдущей.</p>
