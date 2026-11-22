@@ -1292,7 +1292,7 @@
           stoppedReason = "Остановлено пользователем.";
           break;
         }
-        if (outcome?.fatal || stopOnError && !outcome?.ok && !outcome?.skipped) {
+        if (outcome?.fatal || stopOnError && !outcome?.ok) {
           stoppedReason = "Остановлено на журнале: " + title(journal) +
             ". " + (outcome?.reason || "Нужно проверить результат в БАРС.");
           break;
