@@ -1206,7 +1206,8 @@
         group: journal.group,
         subject: journal.subject,
         kind: journal.kind || "theoretical",
-        lessonIds: journal.lessons.map(({id}) => String(id))
+        lessonIds: journal.lessons.map(({id}) => String(id)),
+        lessons: journal.lessons.map(({id, date}) => ({id: String(id), date: String(date)}))
       }
     });
     if (!result?.ok) throw new Error(result?.error || "Не удалось открыть журнал очереди.");
