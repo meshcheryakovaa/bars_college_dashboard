@@ -1230,6 +1230,168 @@
     return result.journal;
   }
 
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  async function saveCheckpoint(patch) {
+    checkpoint = {
+      version: 1, ...(checkpoint || {}), ...patch, updatedAt: new Date().toISOString()
+    };
+    await chrome.storage.local.set({[checkpointKey]: structuredClone(checkpoint)});
+  }
+
+  async function preflightAll(queue, show = true) {
+    const report = [];
+    for (let index = 0; index < queue.length; index++) {
+      if (stopRequested) throw new Error("Проверка очереди остановлена пользователем.");
+      const journal = queue[index];
+      queueStatus.textContent = "Предварительная проверка: " + (index + 1) + "/" +
+        queue.length + " — " + title(journal);
+      const key = keyFor(journal.key);
+      const stored = await chrome.storage.local.get([key, prefix + journal.key]);
+      const entries = (stored[key] || stored[prefix + journal.key])?.entries || {};
+      let remote;
+      try { remote = await navigateQueueJournal(journal); }
+      catch (error) { remote = {error: error.message}; }
+      report.push({journal, ...collegeLessonReconcile.auditJournal(journal, entries, remote)});
+    }
+    if (show) {
+      preflightResult.replaceChildren();
+      for (const item of report) {
+        const row = document.createElement("p");
+        row.textContent = (item.ready ? "ГОТОВ" : "ПРОБЛЕМА") + " — " +
+          title(item.journal) + "; занятий: " + item.lessonCount +
+          (item.issues.length ? "; ошибки: " + item.issues.join("; ") : "") +
+          (item.warnings.length ? "; для сверки: " + item.warnings.join("; ") : "");
+        row.dataset.ready = String(item.ready);
+        preflightResult.append(row);
+      }
+    }
+    return report;
+  }
+
+  async function reconcileJournal(journal, options = {}) {
+    const results = [];
+    const key = keyFor(journal.key);
+    const stored = await chrome.storage.local.get([key, prefix + journal.key]);
+    const entries = structuredClone((stored[key] || stored[prefix + journal.key])?.entries || {});
+    for (const lesson of collegeLessonBatch.lessonsByDate(journal)) {
+      if (stopRequested) break;
+      const id = String(lesson.id);
+      const state = entries[id] || {};
+      const needs = options.all === true ||
+        state.bindAttempted && !state.linked ||
+        state.gradeAttempted && !state.graded ||
+        state.closeAttempted && !state.closed;
+      if (!needs) continue;
+      let snapshot;
+      try {
+        snapshot = await executeLessonOperation(journal, lesson, "inspectRefresh");
+      } catch (error) {
+        snapshot = {ok: false, message: error.message};
+      }
+      const result = collegeLessonReconcile.reconcile(snapshot, state);
+      if (snapshot?.ok && Object.keys(result.patch).length) {
+        entries[id] = {...state, ...result.patch, lastReadAt: new Date().toISOString()};
+        // Checkpoint one lesson at a time, not just after all readbacks.
+        await chrome.storage.local.set({[key]: {
+          version: 1, entries: structuredClone(entries), updatedAt: Date.now()
+        }});
+      }
+      results.push({lesson, ...result, state: snapshot?.state});
+    }
+    if (selectedKey === journal.key) {
+      plans = entries;
+      renderRows();
+    }
+    return results;
+  }
+
+  async function runReconcileSelected() {
+    if (actionBusy) return;
+    const journal = current();
+    if (!journal || !window.confirm("Сверить с БАРС КТП, оценки и закрытие во всех занятиях, требующих проверки, затем продолжить только безопасные незавершённые действия?")) return;
+    actionBusy = true;
+    stopRequested = false;
+    renderRows();
+    try {
+      await navigateQueueJournal(journal);
+      const inspected = await reconcileJournal(journal);
+      const blocked = inspected.filter((x) => !x.safe);
+      message("Сверено занятий: " + inspected.length + ". Требуют ручной проверки: " +
+        blocked.length + ". " + (blocked.length
+          ? blocked.slice(0, 4).map((x) => "№ " + x.lesson.number + ": " + x.issues.join(", ")).join("; ")
+          : "Подтверждённые этапы не будут отправлены повторно."));
+    } catch (error) {
+      message("Ошибка сверки: " + error.message, true);
+    } finally {
+      actionBusy = false; stopRequested = false; renderRows();
+    }
+    // Продолжение — отдельное подтверждение пользователя. Не отправляем запросы
+    // автоматически, если предыдущий HTTP-ответ неизвестен.
+    if (window.confirm("Начать заполнение оставшихся безопасных дат после сверки? Неопределённые ранее отправленные операции будут пропущены.")) {
+      void runFullJournalByDates({stopOnError: false}).catch((error) =>
+        message("Ошибка продолжения: " + error.message, true));
+    }
+  }
+
+  async function recheckPendingClosures() {
+    if (actionBusy) return;
+    const journal = current();
+    if (!journal) return;
+    actionBusy = true; stopRequested = false; renderRows();
+    try {
+      await navigateQueueJournal(journal);
+      const unresolved = collegeLessonBatch.lessonsByDate(journal).filter((lesson) => {
+        const entry = stateFor(String(lesson.id));
+        return entry.closeAttempted && !entry.closed;
+      });
+      let verified = 0, remaining = 0;
+      for (const lesson of unresolved) {
+        if (stopRequested) break;
+        let result;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          result = await executeLessonOperation(journal, lesson, "verifyCloseFinal");
+          if (result.ok && result.verified) break;
+          if (attempt < 2) await pause(800);
+        }
+        if (result?.ok && result.verified) {
+          if (!await storeState(String(lesson.id), {
+            closed: true, closeAttempted: true, closeNeedsReview: false,
+            lastAction: "Закрытие: подтверждено повторным чтением",
+            lastActionAt: new Date().toISOString()
+          })) throw new Error("Не удалось сохранить проверку занятия № " + lesson.number);
+          verified++;
+        } else remaining++;
+      }
+      message("Пакетная проверка закрытий завершена. Подтверждено: " + verified +
+        ", всё ещё не определено: " + remaining +
+        ". Команды «Закрыть занятие» не отправлялись.", remaining > 0);
+    } catch (error) {
+      message("Проверка закрытий остановлена: " + error.message, true);
+    } finally { actionBusy = false; stopRequested = false; renderRows(); }
+  }
+
+  reconcileButton.addEventListener("click", () => {
+    void runReconcileSelected().catch((error) => message("Ошибка сверки: " + error.message, true));
+  });
+  recheckClosuresButton.addEventListener("click", () => {
+    void recheckPendingClosures().catch((error) => message("Ошибка повторной проверки: " + error.message, true));
+  });
+  preflightButton.addEventListener("click", () => {
+    if (actionBusy) return;
+    const lookup = new Map(journals.map((journal) => [journalIdentity(journal), journal]));
+    const queue = favoriteIds.map((id) => lookup.get(id)).filter(Boolean);
+    if (!queue.length) return;
+    actionBusy = true; stopRequested = false; renderRows();
+    void preflightAll(queue).then((report) => {
+      queueStatus.textContent = "Проверено журналов: " + report.length +
+        "; готовы: " + report.filter((x) => x.ready).length +
+        "; с проблемами: " + report.filter((x) => !x.ready).length + ".";
+    }, (error) => {
+      queueStatus.textContent = "Ошибка проверки очереди: " + error.message;
+    }).finally(() => { actionBusy = false; stopRequested = false; renderRows(); });
+  });
+
   async function runFavoriteJournalQueue() {
     if (actionBusy) return;
     if (sourceTabId === null) {
