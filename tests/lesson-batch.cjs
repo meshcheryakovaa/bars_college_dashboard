@@ -115,6 +115,6 @@ assert(dashboard.includes('gradeNeedsReview: true'));
 assert(dashboard.includes('closeNeedsReview: true'));
 assert(dashboard.includes('if (!result.verified)'));
 
-assert.equal(manifest.version, "1.11.0");
+assert.equal(manifest.version, "1.12.0");
 assert.deepEqual(Array.from(manifest.host_permissions), ["https://college.72to.ru/*"]);
 console.log("PASS: serial KTP, grades, close planning, preflight and background-tab UI.");
