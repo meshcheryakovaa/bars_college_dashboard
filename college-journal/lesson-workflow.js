@@ -16,7 +16,12 @@
   let plans = {};
   let saving = false;
 
-  const keyFor = (key) => prefix + key;
+  const keyFor = (key) => {
+    const journal = journals.find((item) => item.key === key);
+    return journal ? prefix + JSON.stringify([
+      journal.origin, journal.period, journal.group, journal.subject, journal.kind || "theoretical"
+    ]) : prefix + key;
+  };
   const norm = (value) => String(value == null ? "" : value).replace(/\s+/g, " ").trim();
   const stateFor = (id) => plans[String(id)] || {};
   const storeState = (id, patch) => {
@@ -171,9 +176,9 @@
     plans = {};
     const journal = current();
     if (journal) {
-      const saved = await chrome.storage.local.get(keyFor(selectedKey));
+      const saved = await chrome.storage.local.get([keyFor(selectedKey), prefix + selectedKey]);
       if (current()?.key !== journal.key) return;
-      plans = saved[keyFor(selectedKey)]?.entries || {};
+      plans = (saved[keyFor(selectedKey)] || saved[prefix + selectedKey])?.entries || {};
     }
     renderRows();
   }
@@ -245,6 +250,7 @@
       const result = await chrome.scripting.executeScript({
         target: {tabId: sourceTabId},
         func: (expected, target, action, number) => {
+          if (location.origin !== expected.origin) return {ok: false, message: "Открыта другая образовательная система."};
           const clean = (v) => String(v || "").replace(/\s+/g, " ").trim();
           const visible = (node) => Boolean(node && node.getClientRects().length);
           const compact = (v) => clean(v).replace(/\s[-–—]\s\d+\s+курс$/i, "");
@@ -311,7 +317,7 @@
           return {ok: true, message: "Найден и подсвечен столбец занятия " + target.number + " (" + target.date + ")."};
         },
         args: [{
-          group: journal.group, subject: journal.subject, practical: journal.kind === "practical"
+          origin: journal.origin, group: journal.group, subject: journal.subject, practical: journal.kind === "practical"
         }, {id: lesson.id, date: lesson.date, number: lesson.number}, mode, ktp]
       });
       const data = result?.[0]?.result;
