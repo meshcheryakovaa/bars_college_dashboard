@@ -1,9 +1,20 @@
 {
   "manifest_version": 3,
   "name": "Сборщик журналов колледжа",
-  "version": "1.7.1",
+  "version": "1.8.0",
   "description": "Собирает журналы и управляет занятиями через штатный интерфейс БАРС с проверками.",
-  "permissions": ["activeTab", "scripting", "storage"],
-  "background": {"service_worker": "background.js"},
-  "action": {"default_popup": "popup.html"}
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "host_permissions": [
+    "https://college.72to.ru/*"
+  ]
 }
