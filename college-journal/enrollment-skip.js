@@ -9,7 +9,10 @@
   function parseWarning(text) {
     const t = norm(text).replace(/[.!]\s*$/, "");
     const m = /^На\s+(\d{1,2}\.\d{1,2}\.\d{4})\s+студент\s+(.+?)\s+не\s+числится\s+в\s+группе\s+(.+)$/i.exec(t);
-    return m ? {date: m[1], student: norm(m[2]), group: norm(m[3])} : null;
+    // A second sentence, a question, or a different warning must NEVER
+    // be mistaken for the single permitted non-enrollment notice.
+    if (!m || /[?!]/.test(m[3]) || /\.\s+\S/.test(m[3])) return null;
+    return {date: m[1], student: norm(m[2]), group: norm(m[3])};
   }
   function fullDate(date, period) {
     const raw = norm(date);
