@@ -255,6 +255,14 @@ let sourceRun = false;
 let batchRun = false;
 let readingSource = false;
 let sourceError = "";
+let workflowBusy = false;
+
+window.addEventListener("college-workflow-busy", (event) => {
+  workflowBusy = Boolean(event.detail?.busy);
+  clearButton.disabled = workflowBusy;
+  dateFrom.disabled = dateTo.disabled = workflowBusy;
+  showSource();
+});
 
 function sendSource(action) {
   return chrome.tabs.sendMessage(sourceTab, {type: "collectorStatus", ...action});
@@ -268,7 +276,7 @@ function markedGroups() {
 }
 
 function updateMarkedButton() {
-  collectMarked.disabled = sourceBusy || sourceTab === undefined || readingSource
+  collectMarked.disabled = workflowBusy || sourceBusy || sourceTab === undefined || readingSource
     || (sourceRun ? !batchRun : !markedGroups().length);
   collectMarked.textContent = batchRun ? "Остановить сбор групп" : "Собрать отмеченные группы в обоих журналах";
 }
@@ -278,10 +286,10 @@ function showSource(state) {
   batchRun = sourceRun && Boolean(state?.auto?.batch);
   readingSource = Boolean(state?.readingGroups);
   updateMarkedButton();
-  readGroups.disabled = sourceBusy || sourceTab === undefined || sourceRun || Boolean(state?.readingGroups);
-  collectGroup.disabled = sourceBusy || sourceTab === undefined || readingSource || batchRun;
-  applyDateButton.disabled = sourceBusy || sourceTab === undefined || readingSource || sourceRun;
-  openSource.disabled = sourceTab === undefined;
+  readGroups.disabled = workflowBusy || sourceBusy || sourceTab === undefined || sourceRun || Boolean(state?.readingGroups);
+  collectGroup.disabled = workflowBusy || sourceBusy || sourceTab === undefined || readingSource || batchRun;
+  applyDateButton.disabled = workflowBusy || sourceBusy || sourceTab === undefined || readingSource || sourceRun;
+  openSource.disabled = workflowBusy || sourceTab === undefined;
   collectGroup.textContent = sourceRun && !batchRun ? "Остановить автосбор" : "Собрать открытую группу";
   const progress = state?.auto;
   const autoText = progress?.message && [progress.total ? `${progress.saved} из ${progress.total}.` : "", progress.message].filter(Boolean).join(" ");
@@ -295,7 +303,7 @@ function showSource(state) {
 }
 
 async function operateSource(action) {
-  if (sourceBusy || sourceTab === undefined) return;
+  if (workflowBusy || sourceBusy || sourceTab === undefined) return;
   sourceBusy = true;
   sourceError = "";
   readGroups.disabled = collectGroup.disabled = collectMarked.disabled = applyDateButton.disabled = true;
@@ -327,6 +335,7 @@ async function operateSource(action) {
 
 applyDateButton.addEventListener("click", () => void operateSource({applyDates: true}));
 clearButton.addEventListener("click", async () => {
+  if (workflowBusy) return;
   if (!window.confirm("Очистить локальную базу? Собранные журналы, справочники и отметки групп будут удалены.")) return;
   clearButton.disabled = true;
   try {
@@ -336,7 +345,7 @@ clearButton.addEventListener("click", async () => {
   } catch (error) {
     clearStatus.textContent = error.message;
   } finally {
-    clearButton.disabled = false;
+    clearButton.disabled = workflowBusy;
   }
 });
 readGroups.addEventListener("click", () => void operateSource({catalog: true}));
@@ -349,6 +358,7 @@ collectMarked.addEventListener("click", () => {
 });
 collectGroup.addEventListener("click", () => void operateSource(sourceRun ? {stopAuto: true} : {startAuto: true}));
 openSource.addEventListener("click", async () => {
+  if (workflowBusy) return;
   try {
     const tab = await chrome.tabs.update(sourceTab, {active: true});
     await chrome.windows.update(tab.windowId, {focused: true});
