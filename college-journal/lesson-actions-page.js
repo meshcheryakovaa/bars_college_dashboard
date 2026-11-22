@@ -627,5 +627,5 @@
       running = false;
     }
   }
-  window.__barsLessonActions = {version: 5, run, evaluateGradeValues, stop() {stopRequested = true;}};
+  window.__barsLessonActions = {version: 5, run, evaluateGradeValues, waitForScoreOrNotice, stop() {stopRequested = true;}};
 })();
