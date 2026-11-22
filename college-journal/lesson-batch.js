@@ -236,20 +236,39 @@
   // закрытие на один урок позже, максимум один урок остаётся pending;
   // после закрытия следующего проверяется предыдущее, без повторного close.
   async function runFillDates(queue, hooks) {
-    let processed = 0, verifiedClose = 0, pending = null, reason = "";
+    const stopOnError = hooks.stopOnError !== false;
+    let processed = 0, verifiedClose = 0, skipped = 0, reason = "";
+    const pending = [], issues = [];
     const perform = async (lesson, stage) => {
-      try {
-        return await hooks.perform(lesson, stage);
-      } catch (error) {
-        return {ok: false, verified: false, message: error.message};
-      }
+      try { return await hooks.perform(lesson, stage); }
+      catch (error) { return {ok: false, verified: false, message: error.message}; }
     };
     const verify = async (lesson, final) => {
-      try {
-        return await hooks.verify(lesson, final);
-      } catch (error) {
-        return {ok: false, verified: false, message: error.message};
+      try { return await hooks.verify(lesson, final); }
+      catch (error) { return {ok: false, verified: false, message: error.message}; }
+    };
+    const problem = async (lesson, stage, result) => {
+      const name = stage === "bind" ? "КТП" : stage === "grades" ? "оценки" :
+        stage === "close" ? "закрытие" : "проверка закрытия";
+      const detail = "Занятие № " + lesson.number + " (" + lesson.date +
+        "), этап " + name + ": " + (result?.message || "нет подтверждения");
+      issues.push({lesson, stage, message: detail});
+      // Ошибка локального сохранения должна останавливать даже мягкий режим:
+      // без защитной отметки автоматическое возобновление небезопасно.
+      let recorded = true;
+      if (hooks.onIssue) {
+        try { recorded = await hooks.onIssue(lesson, stage, result) !== false; }
+        catch { recorded = false; }
       }
+      if (!recorded || result?.fatal) {
+        reason = detail + " Не удалось надёжно сохранить состояние, дальнейшая запись остановлена.";
+        return true;
+      }
+      if (stopOnError) {
+        reason = detail;
+        return true;
+      }
+      return false;
     };
     for (const lesson of queue) {
       if (hooks.stopped()) {
@@ -259,73 +278,85 @@
       let failed = false;
       for (const stage of ["bind", "grades"]) {
         if (!hooks.needed(lesson, stage)) continue;
-        await hooks.progress({lesson, stage, processed, verifiedClose});
+        await hooks.progress({lesson, stage, processed, verifiedClose, skipped, pending});
         const result = await perform(lesson, stage);
         if (!result?.ok || stage === "grades" && !result.verified) {
-          reason = "Занятие № " + lesson.number + " (" + lesson.date + "), этап " +
-            (stage === "bind" ? "КТП" : "оценки") + ": " +
-            (result?.message || "не подтверждено");
+          const halt = await problem(lesson, stage, result);
           failed = true;
+          if (!halt) skipped++;
           break;
         }
       }
-      if (failed) break;
+      if (failed) {
+        if (reason) break;
+        await hooks.progress({lesson, stage: "skipped", processed, verifiedClose, skipped, pending});
+        continue;
+      }
       if (hooks.stopped()) {
         reason = "Остановлено пользователем до закрытия занятия № " + lesson.number + ".";
         break;
       }
       if (hooks.needed(lesson, "close")) {
-        await hooks.progress({lesson, stage: "close", processed, verifiedClose});
+        await hooks.progress({lesson, stage: "close", processed, verifiedClose, skipped, pending});
         const result = await perform(lesson, "close");
         if (!result?.ok) {
-          reason = "Занятие № " + lesson.number + " (" + lesson.date +
-            "), закрытие: " + (result?.message || "неизвестная ошибка");
-          break;
+          const halt = await problem(lesson, "close", result);
+          if (halt) break;
+          skipped++;
+          await hooks.progress({lesson, stage: "skipped", processed, verifiedClose, skipped, pending});
+          continue;
         }
-        // Строго после каждого закрытия: штатное «Обновить» и чтение
-        // выбранного занятия. Отрицательный ответ может быть задержкой.
-        await hooks.progress({lesson, stage: "refresh", processed, verifiedClose});
+        // После каждого запроса закрытия выполняется штатное обновление.
+        // Отрицательный статус может запаздывать на одно или более закрытий.
+        await hooks.progress({lesson, stage: "refresh", processed, verifiedClose, skipped, pending});
         const current = await verify(lesson, true);
         if (!current?.ok) {
-          reason = "Не удалось обновить и проверить занятие № " +
-            lesson.number + " (" + lesson.date + "): " +
-            (current?.message || "ошибка обновления БАРС");
-          // Запрос закрытия уже отправлен. Не повторяем его автоматически.
-          pending = lesson;
-          break;
+          pending.push(lesson);
+          const halt = await problem(lesson, "verify", current);
+          if (halt) break;
+          processed++;
+          await hooks.progress({lesson, stage: "done", processed, verifiedClose, skipped, pending});
+          continue;
         }
-        const previous = pending;
-        if (previous) {
-          const previousResult = await verify(previous, false);
-          if (!previousResult?.ok || !previousResult.verified) {
-            reason = "После следующего закрытия не удалось подтвердить занятие № " +
-              previous.number + " (" + previous.date + "): " +
-              (previousResult?.message || "статус не определён");
-            // Текущее закрытие уже было отправлено. Не повторяем его.
-            pending = current?.verified ? null : lesson;
-            break;
+        const previous = [...pending];
+        if (current.verified) verifiedClose++;
+        else pending.push(lesson);
+        for (const old of previous) {
+          const check = await verify(old, false);
+          if (check?.ok && check.verified) {
+            const i = pending.findIndex((item) => String(item.id) === String(old.id));
+            if (i >= 0) pending.splice(i, 1);
+            verifiedClose++;
+          } else {
+            const halt = await problem(old, "verify", check);
+            if (halt) break;
           }
-          verifiedClose++;
         }
-        if (current?.ok && current.verified) {
-          verifiedClose++;
-          pending = null;
-        } else {
-          pending = lesson;
-        }
+        if (reason) break;
       }
       processed++;
-      await hooks.progress({lesson, stage: "done", processed, verifiedClose, pending});
+      await hooks.progress({lesson, stage: "done", processed, verifiedClose, skipped, pending});
     }
-    // Дополнительная проверка последнего занятия без повторного закрытия.
-    if (!reason && pending && !hooks.stopped()) {
-      const last = await verify(pending, true);
-      if (last?.ok && last.verified) {
-        verifiedClose++;
-        pending = null;
+    // На последней дате не вызываем повторный close: только читаем статус.
+    if (!reason && !hooks.stopped()) {
+      for (const lesson of [...pending]) {
+        const result = await verify(lesson, true);
+        if (result?.ok && result.verified) {
+          const i = pending.findIndex((item) => String(item.id) === String(lesson.id));
+          if (i >= 0) pending.splice(i, 1);
+          verifiedClose++;
+        } else {
+          // Финальная непроверенная дата не считается завершённой.
+          // Не останавливаем уже закончившуюся очередь из-за задержки статуса.
+          issues.push({lesson, stage: "verify", message: "Закрытие занятия № " +
+            lesson.number + " (" + lesson.date + ") осталось неподтверждённым."});
+        }
       }
     }
-    return {processed, verifiedClose, pending, reason};
+    return {
+      processed, verifiedClose, skipped, pending: pending[0] || null,
+      pendingLessons: [...pending], issues, reason
+    };
   }
 
   globalThis.collegeLessonBatch = Object.freeze({
