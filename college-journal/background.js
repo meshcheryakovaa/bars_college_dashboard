@@ -53,7 +53,7 @@ async function saveCatalog({origin, period, groups}) {
 
 async function clearDashboard() {
   const keys = (await chrome.storage.local.getKeys()).filter((key) =>
-    key.startsWith("journal:") || key.startsWith("catalog:"));
+    key.startsWith("journal:") || key.startsWith("catalog:") || key.startsWith("workflow:plan:"));
   await chrome.storage.local.set({"dashboard:cleared-at": Date.now()});
   await chrome.storage.local.remove(keys);
   await chrome.action.setBadgeText({text: ""}).catch(() => {});
