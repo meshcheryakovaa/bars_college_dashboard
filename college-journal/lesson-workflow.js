@@ -1159,6 +1159,11 @@
             message: "Не удалось сохранить итог проверки закрытия."};
         },
         async progress({lesson, stage, processed, verifiedClose, skipped, pending}) {
+          if (queueRunActive) await saveCheckpoint({
+            lessonId: String(lesson.id), stage, processed,
+            confirmedClosures: verifiedClose, skipped, pendingLessonIds:
+              (pending || []).map((item) => String(item.id))
+          });
           batchStatus.completed = processed;
           batchStatus.text = (queueRunActive ? queueRunLabel + ". " : "") +
             "По датам: " + processed + " из " + plan.queue.length +
@@ -1392,7 +1397,7 @@
     }).finally(() => { actionBusy = false; stopRequested = false; renderRows(); });
   });
 
-  async function runFavoriteJournalQueue() {
+  async function runFavoriteJournalQueue({resume = false} = {}) {
     if (actionBusy) return;
     if (sourceTabId === null) {
       queueStatus.textContent = "Откройте дашборд из вкладки БАРС.";
@@ -1411,17 +1416,75 @@
       return;
     }
     const stopOnError = stopErrorsInput.checked;
-    if (!window.confirm("Запустить заполнение очереди из " + queue.length +
-      " избранных журналов?\n\nВ каждом журнале будут обработаны даты с уже назначенными " +
-      "номерами КТП: привязка → «3» → закрытие → обновление → проверка.\n" +
-      "Группа, тип журнала и дисциплина будут переключаться автоматически.\n" +
-      (stopOnError
-        ? "Режим: остановка при ошибке или неподтверждённой операции."
-        : "Режим: записывать ошибки и пропускать проблемные занятия, продолжать следующие журналы.") +
-      "\n\nОтправленные изменения нельзя отменить кнопкой «Остановить».")) return;
+    const savedCheckpoint = resume ? checkpoint : null;
+    if (resume && (!savedCheckpoint || !Array.isArray(savedCheckpoint.journalIds) ||
+      JSON.stringify(savedCheckpoint.journalIds) !== JSON.stringify(favoriteIds))) {
+      queueStatus.textContent = "Состав или порядок избранных журналов изменился. Запустите новую предварительную проверку.";
+      return;
+    }
+    // Предварительная проверка ВСЕХ журналов выполняется до первого изменения.
+    actionBusy = true;
+    stopRequested = false;
+    renderRows();
+    let readiness;
+    try {
+      readiness = await preflightAll(queue);
+      if (resume) {
+        queueStatus.textContent = "Восстановление: сверяем ранее отправленные операции во всех оставшихся журналах.";
+        for (let i = savedCheckpoint.currentIndex || 0; i < queue.length; i++) {
+          if (stopRequested) throw new Error("Остановлено пользователем.");
+          if (!readiness[i].ready) continue;
+          await navigateQueueJournal(queue[i]);
+          await reconcileJournal(queue[i], {all: false});
+        }
+        readiness = await preflightAll(queue);
+      }
+    } catch (error) {
+      queueStatus.textContent = "Предварительная проверка остановлена: " + error.message;
+      actionBusy = false; stopRequested = false; renderRows();
+      return;
+    }
+    if (stopRequested) {
+      queueStatus.textContent = "Предварительная проверка остановлена пользователем.";
+      actionBusy = false; stopRequested = false; renderRows();
+      return;
+    }
+    const invalid = readiness.filter((entry) => !entry.ready);
+    queueStatus.textContent = "Проверено до записи: " + queue.length +
+      " журналов. Готовы: " + (queue.length - invalid.length) +
+      ". С проблемами: " + invalid.length + ".";
+    if (invalid.length && stopOnError) {
+      queueStatus.textContent += " Исправьте замечания предварительной проверки до начала записи.";
+      actionBusy = false; renderRows();
+      return;
+    }
+    const firstIndex = resume ? Math.max(0, Math.min(queue.length - 1,
+      Number(savedCheckpoint.currentIndex || 0))) : 0;
+    const runQueue = queue.slice(firstIndex);
+    if (!window.confirm((resume ? "ВОССТАНОВИТЬ ОЧЕРЕДЬ ПОСЛЕ СВЕРКИ?" :
+      "ЗАПОЛНИТЬ ОЧЕРЕДЬ ЖУРНАЛОВ?") +
+      "\n\nЖурналов в очереди: " + queue.length +
+      ". Осталось: " + runQueue.length +
+      ". Предварительно готовы: " + (queue.length - invalid.length) +
+      ". Проблемных: " + invalid.length +
+      (invalid.length ? "\nПроблемные журналы будут пропущены без записи." : "") +
+      "\n\nКаждая операция будет проверяться по ID занятия, группе и предмету. " +
+      "Неопределённые ранее отправленные действия не повторяются автоматически.")) {
+      actionBusy = false; stopRequested = false; renderRows();
+      return;
+    }
+
     actionBusy = true;
     queueRunActive = true;
     stopRequested = false;
+    await saveCheckpoint({
+      status: "running",
+      journalIds: [...favoriteIds],
+      currentIndex: firstIndex,
+      currentJournal: null, lessonId: null, stage: "preflight-complete",
+      log: resume ? [...(checkpoint?.log || [])] : [],
+      startedAt: resume ? checkpoint?.startedAt : new Date().toISOString()
+    });
     queueLogs = [];
     queueStatus.textContent = "Очередь запущена: 0 из " + queue.length + " журналов.";
     renderQueueResults();
@@ -1429,13 +1492,15 @@
     let finished = 0;
     let stoppedReason = "";
     try {
-      for (const journal of queue) {
+      for (const journal of runQueue) {
         if (stopRequested) {
           stoppedReason = "Остановлено пользователем.";
           break;
         }
-        const position = finished + 1;
+        const position = firstIndex + finished + 1;
         queueRunLabel = "Журнал " + position + "/" + queue.length + ": " + title(journal);
+        await saveCheckpoint({currentIndex: position - 1, currentJournal: journalIdentity(journal),
+          lessonId: null, stage: "navigate"});
         queueStatus.textContent = "Открываем " + queueRunLabel;
         selectedKey = journal.key;
         journalSelect.value = selectedKey;
@@ -1443,6 +1508,8 @@
         await loadPlan();
         let outcome;
         try {
+          const audit = readiness[position - 1];
+          if (!audit?.ready) throw new Error("Предварительная проверка журнала обнаружила ошибки.");
           await navigateQueueJournal(journal);
           if (stopRequested) {
             stoppedReason = "Остановлено пользователем.";
@@ -1460,6 +1527,12 @@
           (outcome?.reason ? ". " + outcome.reason : "");
         queueLogs.push(record);
         finished++;
+        await saveCheckpoint({currentIndex: position, stage: "journal-finished",
+          currentJournal: journalIdentity(journal), lessonId: null,
+          log: [...(checkpoint.log || []), {
+            journal: journalIdentity(journal), at: new Date().toISOString(),
+            processed: outcome?.processed || 0, issues: issues, pending, reason: outcome?.reason || ""
+          }]});
         renderQueueResults();
         queueStatus.textContent = "Очередь: " + finished + " из " + queue.length +
           " журналов. " + (outcome?.ok ? "Без замечаний." : "Есть замечания.");
@@ -1474,7 +1547,7 @@
         }
       }
       queueStatus.textContent = (stoppedReason ? "ОЧЕРЕДЬ ОСТАНОВЛЕНА. " : "ОЧЕРЕДЬ ЗАВЕРШЕНА. ") +
-        "Обработано журналов: " + finished + " из " + queue.length +
+        "Обработано журналов: " + (firstIndex + finished) + " из " + queue.length +
         ". Журналов с замечаниями: " +
         queueLogs.filter((entry) => entry.startsWith("Требует проверки")).length +
         "." + (stoppedReason ? " " + stoppedReason : "");
@@ -1482,6 +1555,12 @@
       queueStatus.textContent = "Ошибка очереди: " + error.message +
         ". Проверьте отправленные записи в БАРС.";
     } finally {
+      try {
+        await saveCheckpoint({status: finished === runQueue.length && !stoppedReason
+          ? "completed" : "interrupted", stage: "idle"});
+      } catch (error) {
+        queueStatus.textContent += " Состояние очереди не сохранилось: " + error.message;
+      }
       queueRunActive = false;
       queueRunLabel = "";
       actionBusy = false;
@@ -1494,6 +1573,12 @@
       });
     }
   }
+
+  resumeQueueButton.addEventListener("click", () => {
+    void runFavoriteJournalQueue({resume: true}).catch((error) => {
+      queueStatus.textContent = "Восстановление не удалось: " + error.message;
+    });
+  });
 
   queueRunButton.addEventListener("click", () => {
     void runFavoriteJournalQueue().catch((error) => {
