@@ -202,6 +202,19 @@
         button("Закрыть занятие", () => void runLessonAction(journal, lesson, "close"),
           actionBusy || sourceTabId === null || !state.linked || !state.graded)
       );
+      if (!state.linked && (state.bindAttempted || state.bindNeedsReview || /^КТП:/.test(state.lastAction || ""))) {
+        actions.append(button("Разрешить повтор КТП", () => {
+          if (!window.confirm("Убедитесь в БАРС, что тема не привязалась. Сбросить локальную защиту от повторной отправки для занятия № " +
+            lesson.number + " (" + lesson.date + ")?")) return;
+          void storeState(id, {
+            bindAttempted: false, bindNeedsReview: false, lastAction: "", lastActionAt: ""
+          }).then((saved) => {
+            renderRows();
+            message(saved ? "Для занятия № " + lesson.number + " разрешена повторная отправка КТП." :
+              "Не удалось сохранить снятие блокировки.", !saved);
+          });
+        }, actionBusy));
+      }
       if (state.lastAction) {
         const info = document.createElement("small");
         info.className = "workflow-last";
@@ -246,6 +259,8 @@
   });
   journalSelect.addEventListener("change", () => {
     selectedKey = journalSelect.value;
+    batchStatus = null;
+    renderBatchProgress();
     void loadPlan();
   });
   numberAll.addEventListener("click", async () => {
