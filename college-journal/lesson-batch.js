@@ -282,7 +282,8 @@
         if (!hooks.needed(lesson, stage)) continue;
         await hooks.progress({lesson, stage, processed, verifiedClose, skipped, pending});
         const result = await perform(lesson, stage);
-        if (!result?.ok || stage === "grades" && !result.verified) {
+        if (!result?.ok || stage === "grades" && !result.verified ||
+          stage === "bind" && hooks.requireKtpVerification === true && !result.verified) {
           const halt = await problem(lesson, stage, result);
           failed = true;
           if (!halt) skipped++;
@@ -328,6 +329,10 @@
           if (check?.ok && check.verified) {
             const i = pending.findIndex((item) => String(item.id) === String(old.id));
             if (i >= 0) pending.splice(i, 1);
+            for (let j = issues.length - 1; j >= 0; j--) {
+              if (String(issues[j].lesson.id) === String(old.id) &&
+                (issues[j].stage === "verify" || issues[j].stage === "refresh")) issues.splice(j, 1);
+            }
             verifiedClose++;
           } else {
             const halt = await problem(old, "verify", check);
@@ -346,6 +351,10 @@
         if (result?.ok && result.verified) {
           const i = pending.findIndex((item) => String(item.id) === String(lesson.id));
           if (i >= 0) pending.splice(i, 1);
+          for (let j = issues.length - 1; j >= 0; j--) {
+            if (String(issues[j].lesson.id) === String(lesson.id) &&
+              (issues[j].stage === "verify" || issues[j].stage === "refresh")) issues.splice(j, 1);
+          }
           verifiedClose++;
         } else {
           // Финальная непроверенная дата не считается завершённой.
