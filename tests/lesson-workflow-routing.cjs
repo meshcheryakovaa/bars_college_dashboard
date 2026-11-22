@@ -13,7 +13,7 @@ function section(from, to) {
 }
 
 const bind = section("async function runBatchBinding()", "async function runBatchDelayedClose(");
-const close = section("async function runBatchWrite(action)", "async function runFullJournalByDates()");
+const close = section("async function runBatchWrite(action)", "async function runFullJournalByDates(");
 assert(!/\bgrading\b/.test(bind), "KTP batch must not use undefined grading");
 assert(!/\bpriorPending\b/.test(bind), "KTP batch must not use close-only pending state");
 assert(!/\brunBatchDelayedClose\s*\(/.test(bind),
