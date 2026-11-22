@@ -114,9 +114,10 @@
       throw new Error("Не удалось определить выпадающий список по полю.");
     }
 
-    const busy = Boolean(pending.size || ext.Ajax.isLoading?.() || store.loading === true || combo.loading === true);
+    const pickerBusy = store.loading === true || combo.loading === true;
+    const busy = Boolean(pickerBusy || pending.size || ext.Ajax.isLoading?.());
     if (action === "state") {
-      return {busy, value: String(combo.getValue() ?? "")};
+      return {busy, pickerBusy, value: String(combo.getValue() ?? "")};
     }
 
     if (action === "open") {
@@ -136,7 +137,7 @@
     });
     if (action === "list") {
       return {
-        busy,
+        busy: pickerBusy,
         expanded: combo.isExpanded(),
         listId: combo.innerList?.dom?.id,
         rendered: combo.view?.getNodes?.().length ?? null,
@@ -146,7 +147,7 @@
     }
     if (action === "select") {
       const index = items.findIndex(({value, label}) => value === option.value && label === option.label);
-      if (index < 0 || busy) throw new Error("Выпадающий список изменился. Запустите сбор снова.");
+      if (index < 0 || pickerBusy) throw new Error("Выпадающий список изменился. Запустите сбор снова.");
       if (option.activateItem) combo.select?.(index, false);
       combo.onSelect(records[index], index);
       return {};

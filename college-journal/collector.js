@@ -27,11 +27,13 @@
 
   function labeledField(window, label) {
     if (!window) return null;
-    const fields = all(window, ".x-form-item")
-      .filter((item) => visible(item) && label.test(text(item.querySelector("label"))))
-      .map((item) => item.querySelector('input[type="text"]'))
-      .filter((field) => field?.id && visible(field) && !field.disabled);
-    return fields.length === 1 ? fields[0] : null;
+    const fields = new Set();
+    for (const caption of all(window, "label")) {
+      if (!label.test(text(caption))) continue;
+      const field = caption.control ?? caption.closest(".x-form-item")?.querySelector('input[type="text"]');
+      if (field?.matches("input") && field.id && window.contains(field) && visible(field) && !field.disabled) fields.add(field);
+    }
+    return fields.size === 1 ? fields.values().next().value : null;
   }
 
   const groupField = (window) => labeledField(window, /^(учебная\s+)?группа\s*[:*]?$/i);
@@ -58,21 +60,21 @@
       visible(grid) && grid.querySelector(".x-grid3-locked") && grid.querySelector(".x-grid3-unlocked")
     );
     const grid = grids.length === 1 ? grids[0] : null;
-    const panel = grid?.closest(".x-window-mc");
-    const fields = all(panel ?? window, ".x-form-item").filter((item) =>
-      /^Предмет\s*:?$/.test(text(item.querySelector("label"))) && visible(item)
-    ).map((item) => item.querySelector('input[type="text"]')).filter(Boolean);
-    const lists = groupLists();
-    const recent = recentGroupList && lists.find(({list}) => list.id === recentGroupList);
-    const groupLabels = (recent ? [recent] : lists)
-      .filter(({list}) => !visible(list)).flatMap(({list}) => all(list, ".x-combo-selected").map(text));
-    const fallback = groupLabels.length ? groupLabels : all(document, ".x-combo-list-inner .x-combo-selected")
-      .map(text).filter((label) => courseSuffix.test(label));
-    const fieldValue = clean(groupField(window)?.value);
-    const group = courseSuffix.test(fieldValue) || groupCode.test(fieldValue)
-      ? fieldValue : fallback.length === 1 ? fallback[0] : "";
+    const field = labeledField(window, /^Предмет\s*:?$/i);
+    const groupInput = groupField(window);
+    let group = clean(groupInput?.value);
+    if (groupInput?.classList.contains("x-form-empty-field")) group = "";
+    if (!groupInput) {
+      const lists = groupLists();
+      const recent = recentGroupList && lists.find(({list}) => list.id === recentGroupList);
+      const hidden = (recent ? [recent] : lists).filter(({list}) => !visible(list))
+        .flatMap(({list}) => all(list, ".x-combo-selected").map(text));
+      const labels = hidden.length ? hidden : all(document, ".x-combo-list-inner .x-combo-selected")
+        .map(text).filter((label) => courseSuffix.test(label));
+      if (labels.length === 1) group = labels[0];
+    }
     const period = readPeriod();
-    return {window, grid, field: fields.length === 1 ? fields[0] : null, group, period, practical};
+    return {window, grid, field, group, period, practical};
   }
 
   const masked = (scope) => all(document, ".ext-el-mask, .ext-el-mask-msg").some((element) => {
@@ -266,7 +268,7 @@
     const before = await waitStable(() => {
       const scope = findScope(practical);
       const fields = dateFields(scope?.window);
-      if (fields.some((field) => !field) || masked(scope) || pageCommand(null, "ajax").busy) return null;
+      if (fields.some((field) => !field)) return null;
       const fieldIds = fields.map((field) => field.id);
       const period = pageCommand(null, "dateState", {fieldIds}).dates;
       return {key: JSON.stringify([fieldIds, period]), value: {fieldIds, period}};
@@ -277,7 +279,7 @@
     await waitStable(() => {
       const scope = findScope(practical);
       const fields = dateFields(scope?.window);
-      if (fields.some((field) => !field) || masked(scope) || pageCommand(null, "ajax").busy) return null;
+      if (fields.some((field) => !field)) return null;
       const fieldIds = fields.map((field) => field.id);
       const actual = pageCommand(null, "dateState", {fieldIds}).dates;
       return actual.every((value, i) => value === dates[i]) ? {key: fieldIds.join(" "), value: true} : null;
@@ -297,13 +299,12 @@
       const period = readPeriod();
       if (period !== target.period) throw new Error("Учебный период на сайте изменился.");
       const active = findScope(practical);
-      const ajax = pageCommand(null, "ajax");
-      if (masked(active) || ajax.busy) return null;
+      if (!active) return null;
 
-      const isTarget = active?.field && groupName(active.group) === groupName(target.name);
+      const isTarget = active.field && groupName(groupField(active.window)?.value) === groupName(target.name);
       const currentVersion = active && tableVersion(active);
       const fresh = !previous || active?.window !== previous.window || (currentVersion && tableChanged(version, currentVersion)) || groupName(previous.group) === groupName(target.name);
-      if (isTarget && !pageCommand(active, "state").busy) {
+      if (isTarget && !pageCommand(active, "state").pickerBusy) {
         return {key: active.field.id, value: {mustRefresh: !fresh}};
       }
 
@@ -320,8 +321,8 @@
             && (list.rendered === null || list.rendered === list.items.length)) {
             const matches = list.items.filter(({label}) => groupName(label) === groupName(target.name));
             if (matches.length === 1) {
-              selected = true;
               pageCommand(picker, "select", {...matches[0], activateItem: true});
+              selected = true;
               recentGroupList = list.listId;
             }
           }
@@ -337,6 +338,11 @@
     }, signal, "Не удалось открыть журнал группы «" + target.name + "».", 650, 120000);
   }
 
+  function activateJournalTab(window) {
+    const tab = all(window, ".x-tab-strip-text").find((item) => visible(item) && text(item) === "Журнал");
+    if (tab && !tab.closest(".x-tab-strip-active")) (tab.closest("a") ?? tab).click();
+  }
+
   async function openJournal(practical, signal) {
     const title = journalTitle(practical);
     const current = journalWindows(practical)[0];
@@ -350,13 +356,12 @@
     let activated;
     return waitStable(() => {
       const window = journalWindows(practical)[0];
-      if (!window || pageCommand(null, "ajax").busy) return null;
+      if (!window) return null;
       if (activated !== window) {
         activated = window;
         pageCommand(null, "activateWindow", {id: window.id});
-        const tab = all(window, ".x-tab-strip-text").find((item) => text(item) === "Журнал");
-        if (tab && !tab.closest?.(".x-tab-strip-active")) tab.closest?.("a")?.click();
       }
+      activateJournalTab(window);
       const scope = findScope(practical);
       return scope && groupField(scope.window) && dateFields(scope.window).every(Boolean)
         ? {key: scope.window.id, value: scope} : null;
@@ -393,7 +398,6 @@
         auto.saved = 0;
         auto.total = 0;
         try {
-          await applyDates(range, signal, practical);
           const {mustRefresh} = await openBatchGroup(group, signal, practical);
           await applyDates(range, signal, practical);
           await collectGroup(signal, group, practical, mustRefresh, range);
@@ -432,26 +436,33 @@
     if (target && groupName(start.group) !== groupName(target.name)) {
       throw new Error("Открылась другая группа. Сбор остановлен.");
     }
+    let lastTabAttempt = 0;
     function groupScope() {
-      const current = findScope(practical);
+      let current = findScope(practical);
+      if (!current && start.window.isConnected && journalWindows(start.practical)[0] === start.window
+        && Date.now() - lastTabAttempt >= 1000) {
+        lastTabAttempt = Date.now();
+        activateJournalTab(start.window);
+        current = findScope(practical);
+      }
       if (!start.window.isConnected || (current && (current.window !== start.window
         || current.period !== start.period || (start.group && current.group && groupName(current.group) !== groupName(start.group))))) {
         throw new Error("Группа или учебный период сменились.");
       }
-      if (target && groupName(current?.group) !== groupName(target.name)) return null;
+      if (target && groupName(groupField(current?.window)?.value) !== groupName(target.name)) return null;
       return current?.field ? current : null;
     }
 
     const initial = await waitStable(() => {
       const scope = groupScope();
-      return scope && !masked(scope) && !pageCommand(scope, "state").busy
+      return scope && !pageCommand(scope, "state").pickerBusy
         ? {key: scope.field.id, value: scope} : null;
     }, signal, "Журнал группы не загрузился.");
 
     pageCommand(initial, "open");
     const options = await waitStable(() => {
       const scope = groupScope();
-      if (!scope || masked(scope)) return null;
+      if (!scope) return null;
       const list = pageCommand(scope, "list");
       if (list.busy || !list.expanded || !list.items.length
         || (list.rendered !== null && list.rendered !== list.items.length)) return null;
@@ -489,9 +500,8 @@
         const active = groupScope();
         if (!active || masked(active)) return null;
         const state = pageCommand(active, "state");
-        const latest = tableVersion(active);
-        if (state.busy || state.value !== option.value || clean(active.field.value) !== option.label
-          || (!alreadyOpen && !tableChanged(previous, latest))) return null;
+        if (state.busy || state.value !== option.value || clean(active.field.value) !== option.label) return null;
+        if (!alreadyOpen && !tableChanged(previous, tableVersion(active))) return null;
         const data = readPage(active);
         return data ? {key: JSON.stringify(data), value: data} : null;
       }, signal, "Не дождались новой таблицы для предмета «" + option.label + "» за 60 секунд.");
