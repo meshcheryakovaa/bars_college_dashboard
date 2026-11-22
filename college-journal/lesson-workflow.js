@@ -1132,6 +1132,140 @@
     return response;
   }
 
+  async function navigateQueueJournal(journal) {
+    if (sourceTabId === null) throw new Error("Не найдена исходная вкладка БАРС.");
+    const target = {tabId: sourceTabId};
+    // Повторно используем механизм автоматического выбора Ext JS-комбобоксов
+    // из collector.js и journal-page.js. Фокус вкладки не переключается.
+    await chrome.scripting.executeScript({target, world: "MAIN", files: ["journal-page.js"]});
+    await chrome.scripting.executeScript({target, files: ["collector.js"]});
+    const result = await chrome.tabs.sendMessage(sourceTabId, {
+      type: "navigateJournal",
+      journal: {
+        origin: journal.origin,
+        period: journal.period,
+        group: journal.group,
+        subject: journal.subject,
+        kind: journal.kind || "theoretical",
+        lessonIds: journal.lessons.map(({id}) => String(id))
+      }
+    });
+    if (!result?.ok) throw new Error(result?.error || "Не удалось открыть журнал очереди.");
+    return result.journal;
+  }
+
+  async function runFavoriteJournalQueue() {
+    if (actionBusy) return;
+    if (sourceTabId === null) {
+      queueStatus.textContent = "Откройте дашборд из вкладки БАРС.";
+      return;
+    }
+    const lookup = new Map(journals.map((journal) => [journalIdentity(journal), journal]));
+    const missing = favoriteIds.filter((id) => !lookup.has(id));
+    if (missing.length) {
+      queueStatus.textContent = "В очереди есть " + missing.length +
+        " журналов, отсутствующих в текущей базе. Пересоберите их или очистите избранное.";
+      return;
+    }
+    const queue = favoriteIds.map((id) => lookup.get(id));
+    if (!queue.length) {
+      queueStatus.textContent = "Отметьте нужные журналы галочками в списке избранных.";
+      return;
+    }
+    const stopOnError = stopErrorsInput.checked;
+    if (!window.confirm("Запустить заполнение очереди из " + queue.length +
+      " избранных журналов?\n\nВ каждом журнале будут обработаны даты с уже назначенными " +
+      "номерами КТП: привязка → «3» → закрытие → обновление → проверка.\n" +
+      "Группа, тип журнала и дисциплина будут переключаться автоматически.\n" +
+      (stopOnError
+        ? "Режим: остановка при ошибке или неподтверждённой операции."
+        : "Режим: записывать ошибки и пропускать проблемные занятия, продолжать следующие журналы.") +
+      "\n\nОтправленные изменения нельзя отменить кнопкой «Остановить».")) return;
+    actionBusy = true;
+    queueRunActive = true;
+    stopRequested = false;
+    queueLogs = [];
+    queueStatus.textContent = "Очередь запущена: 0 из " + queue.length + " журналов.";
+    renderQueueResults();
+    renderRows();
+    let finished = 0;
+    let stoppedReason = "";
+    try {
+      for (const journal of queue) {
+        if (stopRequested) {
+          stoppedReason = "Остановлено пользователем.";
+          break;
+        }
+        const position = finished + 1;
+        queueRunLabel = "Журнал " + position + "/" + queue.length + ": " + title(journal);
+        queueStatus.textContent = "Открываем " + queueRunLabel;
+        selectedKey = journal.key;
+        journalSelect.value = selectedKey;
+        ktpStart.value = "";
+        await loadPlan();
+        let outcome;
+        try {
+          await navigateQueueJournal(journal);
+          if (stopRequested) {
+            stoppedReason = "Остановлено пользователем.";
+            break;
+          }
+          outcome = await runFullJournalByDates({fromQueue: true, stopOnError});
+        } catch (error) {
+          outcome = {ok: false, fatal: false, reason: error.message,
+            processed: 0, issues: 1, pending: 0};
+        }
+        const issues = Number(outcome?.issues || 0), pending = Number(outcome?.pending || 0);
+        const record = (outcome?.ok ? "Завершён" : "Требует проверки") + " — " +
+          title(journal) + ". Дат обработано: " + (outcome?.processed ?? 0) +
+          ", ошибок/пропусков: " + issues + ", ожидают закрытия: " + pending +
+          (outcome?.reason ? ". " + outcome.reason : "");
+        queueLogs.push(record);
+        finished++;
+        renderQueueResults();
+        queueStatus.textContent = "Очередь: " + finished + " из " + queue.length +
+          " журналов. " + (outcome?.ok ? "Без замечаний." : "Есть замечания.");
+        if (stopRequested) {
+          stoppedReason = "Остановлено пользователем.";
+          break;
+        }
+        if (outcome?.fatal || stopOnError && !outcome?.ok && !outcome?.skipped) {
+          stoppedReason = "Остановлено на журнале: " + title(journal) +
+            ". " + (outcome?.reason || "Нужно проверить результат в БАРС.");
+          break;
+        }
+      }
+      queueStatus.textContent = (stoppedReason ? "ОЧЕРЕДЬ ОСТАНОВЛЕНА. " : "ОЧЕРЕДЬ ЗАВЕРШЕНА. ") +
+        "Обработано журналов: " + finished + " из " + queue.length +
+        ". Журналов с замечаниями: " +
+        queueLogs.filter((entry) => entry.startsWith("Требует проверки")).length +
+        "." + (stoppedReason ? " " + stoppedReason : "");
+    } catch (error) {
+      queueStatus.textContent = "Ошибка очереди: " + error.message +
+        ". Проверьте отправленные записи в БАРС.";
+    } finally {
+      queueRunActive = false;
+      queueRunLabel = "";
+      actionBusy = false;
+      stopRequested = false;
+      renderRows();
+      // Во время записи блокируем реакцию на события storage.onChanged,
+      // теперь безопасно перечитать список журналов и последний план.
+      await refresh().catch((error) => {
+        queueStatus.textContent += " Не удалось обновить список: " + error.message;
+      });
+    }
+  }
+
+  queueRunButton.addEventListener("click", () => {
+    void runFavoriteJournalQueue().catch((error) => {
+      queueStatus.textContent = "Ошибка очереди журналов: " + error.message;
+      actionBusy = false;
+      queueRunActive = false;
+      renderRows();
+    });
+  });
+
   fullDatesButton.addEventListener("click", () => {
     void runFullJournalByDates().catch((error) => message("Ошибка заполнения журнала по датам: " + error.message, true));
   });
