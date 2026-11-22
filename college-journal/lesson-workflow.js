@@ -28,6 +28,7 @@
   let actionBusy = false;
   let stopRequested = false;
   let batchStatus = null;
+  let ktpAssignmentPromise = null;
 
   const keyFor = (key) => {
     const journal = journals.find((item) => item.key === key);
@@ -311,6 +312,10 @@
     void loadPlan();
   });
   async function applySequentialKtp(confirmOverwrite = true) {
+    // Изменение поля и нажатие кнопки могут сработать почти одновременно:
+    // ждём одну и ту же операцию, чтобы не запустить БАРС до записи плана.
+    if (ktpAssignmentPromise) return ktpAssignmentPromise;
+    const task = (async () => {
     if (actionBusy) return false;
     const journal = current();
     if (!journal) return false;
@@ -360,6 +365,13 @@
     message(saved ? "Назначены темы КТП: " + assignment.map(x => x.ktpNumber).join(", ") + "." :
       "Не удалось сохранить последовательность КТП.", !saved);
     return saved;
+    })();
+    ktpAssignmentPromise = task;
+    try {
+      return await task;
+    } finally {
+      if (ktpAssignmentPromise === task) ktpAssignmentPromise = null;
+    }
   }
 
   numberAll.addEventListener("click", () => void applySequentialKtp());
