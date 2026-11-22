@@ -261,7 +261,7 @@
           const journalWindow = windows.find((node) => {
             const practical = clean(node.querySelector(".x-window-header-text")?.textContent).includes("практических");
             if (practical !== expected.practical) return false;
-            const field = (label) => [...node.querySelectorAll(".x-form-item")].find((item) =>
+            const field = (label) => [...node.querySelectorAll(".x-form-item")].filter(visible).find((item) =>
               [...item.querySelectorAll("label")].some((el) => clean(el.textContent).replace(/[:*]/g, "") === label))
               ?.querySelector('input[type="text"]')?.value;
             return compact(field("Группа")) === compact(expected.group) && clean(field("Предмет")) === clean(expected.subject);
