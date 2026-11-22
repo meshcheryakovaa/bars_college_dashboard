@@ -1,7 +1,7 @@
 /* Запись через штатные Ext JS обработчики БАРС, без прямых запросов к API. */
 (() => {
   "use strict";
-  if (window.__barsLessonActions?.version === 4) return;
+  if (window.__barsLessonActions?.version === 5) return;
   const clean = (x) => String(x ?? "").replace(/\s+/g, " ").trim();
   const shown = (x) => Boolean(x?.isConnected && x.getClientRects().length);
   const cells = (row) => [...row.querySelectorAll("td.x-grid3-cell")];
@@ -68,17 +68,19 @@
     assert(String(Number(parsed[1])) === String(Number(task.number))
       && parsed[2].slice(0, 5) === String(task.date).slice(0, 5),
     "Дата или номер занятия изменились: повторно соберите журнал.");
+    let studentRowIds = [];
     if (task.studentIds?.length) {
       const leftHidden = [...left.querySelectorAll(".x-grid3-header td.x-grid3-hd.x-grid3-cell")]
         .find((node) => node.style.display === "none");
       assert(leftHidden, "Не найдена колонка идентификаторов студентов.");
       const idKey = key(leftHidden);
       const ids = leftRows.map((row) => clean(cells(row).find((node) => key(node) === idKey)?.textContent));
+      studentRowIds = ids;
       const expected = new Set(task.studentIds.map(String));
       assert(ids.length === expected.size && ids.every((id) => expected.has(id)),
         "Состав студентов изменился. Пересоберите журнал перед выставлением оценок.");
     }
-    return {win, grid, right, left, rightRows, header, headers, lessonKey: key(header)};
+    return {win, grid, right, left, rightRows, studentRowIds, header, headers, lessonKey: key(header)};
   }
   // В БАРС занятие выбирают нажатием на нижний заголовок «Пос»
   // (посещаемость), а НЕ на групповой заголовок «(№) - дата».
@@ -290,6 +292,94 @@
       ?.querySelector(".x-grid3-cell-selected.x-grid3-td-" + c.colId));
     return selected.length === 1 ? selected[0] : null;
   }
+  // Save response and Ext JS warning are observed in the SAME polling cycle.
+  // Only an exact non-enrollment warning for this lesson/student may be dismissed.
+  function visibleNotice(info) {
+    const popups = dialogs(info).map((win) => {
+      const el = win.querySelector(".ext-mb-text") ||
+        win.querySelector(".ext-mb-content") ||
+        win.querySelector(".x-window-body");
+      return {win, text: clean(el?.textContent)};
+    }).filter(({text}) => text);
+    if (popups.length > 1) throw new Error(
+      "БАРС открыл несколько диалогов. Автоматическое подтверждение запрещено.");
+    return popups[0] || null;
+  }
+
+  function persistEnrollmentSkip(task, student, warning) {
+    const requestId = "skip-" + crypto.randomUUID();
+    return new Promise((resolve, reject) => {
+      let done = false;
+      const finish = (error, saved) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        window.removeEventListener("message", receive);
+        error ? reject(error) : resolve(saved);
+      };
+      const receive = (event) => {
+        const response = event.data;
+        if (event.source !== window || event.origin !== location.origin ||
+          response?.channel !== "bars-enrollment-skip-v1" ||
+          response.kind !== "ack" || response.requestId !== requestId) return;
+        finish(response.ok ? null : new Error(response.error ||
+          "Не удалось сохранить пропуск студента в расширении."), response.skip);
+      };
+      const timer = setTimeout(() => finish(new Error(
+        "Нет подтверждения сохранения пропуска студента. Продолжать запись нельзя.")), 10000);
+      window.addEventListener("message", receive);
+      window.postMessage({
+        channel: "bars-enrollment-skip-v1", kind: "persist", requestId,
+        task: {origin: task.origin, period: task.period, group: task.group,
+          subject: task.subject, practical: task.practical, lessonId: task.lessonId,
+          date: task.date},
+        studentId: student.id, studentName: student.name, warning
+      }, location.origin);
+    });
+  }
+
+  async function waitForScoreOrNotice(task, info, net, checkpoint, student) {
+    const model = window.__barsEnrollmentSkip;
+    assert(model, "Модуль проверки зачисления не загружен.");
+    // Polling checks BOTH independent signals; no pending promise races,
+    // abandoned waiters or waiting for save_lesson_score after an alert.
+    const evaluate = () => {
+      const notice = visibleNotice(info);
+      if (notice) return {kind: "notice", ...notice};
+      const response = net.entries.slice(checkpoint)
+        .find((entry) => entry.path.endsWith("/save_lesson_score"));
+      return response ? {kind: "save", response} : null;
+    };
+    let observed = await until(evaluate, 12500,
+      "БАРС не подтвердил сохранение и не показал предупреждение для студента " +
+      student.name + ".");
+    if (observed.kind === "save") {
+      // Ext JS may show its message box slightly AFTER the XHR completes.
+      await sleep(380);
+      const later = visibleNotice(info);
+      if (later) observed = {kind: "notice", ...later};
+    }
+    if (observed.kind === "notice") {
+      assert(model.matchWarning(observed.text, task, student.name),
+        "БАРС показал другое предупреждение: «" + observed.text +
+        "». Оно оставлено открытым для ручной проверки.");
+      const buttons = [...observed.win.querySelectorAll("button")].filter(shown)
+        .filter((el) => !el.disabled);
+      assert(buttons.length === 1 && /^(?:ОК|OK)$/i.test(clean(buttons[0].textContent)),
+        "Предупреждение об отсутствии зачисления распознано, но нет единственной кнопки «ОК». Окно оставлено открытым.");
+      const skipped = await persistEnrollmentSkip(task, student, observed.text);
+      // Acknowledge only after the exception is durable, not before.
+      buttons[0].click();
+      await until(() => !shown(observed.win), 5000,
+        "БАРС не закрыл подтверждённое предупреждение после «ОК».");
+      return {kind: "skipped", skip: skipped};
+    }
+    assert(!observed.response.error,
+      "Оценка студента " + student.name + " не сохранена: " +
+      observed.response.error);
+    return {kind: "saved"};
+  }
+
   async function gradeAll(task, info, net) {
     selectLesson(info);
     const cmp = gridComponent(info);
