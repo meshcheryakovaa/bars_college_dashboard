@@ -36,5 +36,5 @@ for (const phrase of [
 }
 assert(!/chrome\.tabs\.update\s*\(|chrome\.windows\.update\s*\(/.test(workflow),
   "Operations must not switch tabs");
-assert.equal(manifest.version, "1.12.0");
+assert.equal(manifest.version, "1.13.0");
 console.log("PASS: no undefined grading in KTP batch; delayed close routing restored; async errors caught");
