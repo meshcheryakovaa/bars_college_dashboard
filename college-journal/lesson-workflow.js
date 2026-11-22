@@ -543,10 +543,6 @@
       ". Неясный результат предыдущих операций: " + plan.unresolved.length + ".\n\n" +
       "Вкладка с дашбордом останется активной. Очередь остановится при первой ошибке.";
     if (!window.confirm(prompt)) return;
-    if (!grading) {
-      await runBatchDelayedClose(journal, plan, label, priorPending);
-      return;
-    }
 
     actionBusy = true;
     stopRequested = false;
@@ -751,6 +747,10 @@
         : "После каждого следующего закрытия будет проверено предыдущее занятие. " +
           "Последнее будет повторно проверено после обновления журнала; оно может остаться неподтверждённым.");
     if (!window.confirm(prompt)) return;
+    if (!grading) {
+      await runBatchDelayedClose(journal, plan, label, priorPending);
+      return;
+    }
 
     actionBusy = true;
     stopRequested = false;
