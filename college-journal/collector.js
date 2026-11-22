@@ -606,7 +606,9 @@
     }
     return {
       group: selected.group, subject: selected.subject, kind: selected.kind || "theoretical",
-      lessonCount: selected.lessons.length
+      lessonCount: selected.lessons.length,
+      lessonIds: selected.lessons.map(({id}) => String(id)),
+      studentIds: selected.students.map(({id}) => String(id))
     };
   }
 
