@@ -252,7 +252,8 @@
         stage === "close" ? "закрытие" : "проверка закрытия";
       const detail = "Занятие № " + lesson.number + " (" + lesson.date +
         "), этап " + name + ": " + (result?.message || "нет подтверждения");
-      issues.push({lesson, stage, message: detail});
+      if (!issues.some((entry) => String(entry.lesson.id) === String(lesson.id) &&
+        entry.stage === stage)) issues.push({lesson, stage, message: detail});
       // Ошибка локального сохранения должна останавливать даже мягкий режим:
       // без защитной отметки автоматическое возобновление небезопасно.
       let recorded = true;
@@ -348,8 +349,12 @@
         } else {
           // Финальная непроверенная дата не считается завершённой.
           // Не останавливаем уже закончившуюся очередь из-за задержки статуса.
-          issues.push({lesson, stage: "verify", message: "Закрытие занятия № " +
-            lesson.number + " (" + lesson.date + ") осталось неподтверждённым."});
+          if (!issues.some((entry) => String(entry.lesson.id) === String(lesson.id) &&
+            entry.stage === "verify")) issues.push({
+            lesson, stage: "verify",
+            message: "Закрытие занятия № " + lesson.number + " (" + lesson.date +
+              ") осталось неподтверждённым."
+          });
         }
       }
     }
