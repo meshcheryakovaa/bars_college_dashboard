@@ -1477,7 +1477,8 @@
     actionBusy = true;
     queueRunActive = true;
     stopRequested = false;
-    await saveCheckpoint({
+    try {
+      await saveCheckpoint({
       status: "running",
       journalIds: [...favoriteIds],
       currentIndex: firstIndex,
@@ -1485,6 +1486,13 @@
       log: resume ? [...(checkpoint?.log || [])] : [],
       startedAt: resume ? checkpoint?.startedAt : new Date().toISOString()
     });
+    } catch (error) {
+      actionBusy = false;
+      queueRunActive = false;
+      renderRows();
+      queueStatus.textContent = "Не удалось сохранить контрольную точку: " + error.message;
+      return;
+    }
     queueLogs = [];
     queueStatus.textContent = "Очередь запущена: 0 из " + queue.length + " журналов.";
     renderQueueResults();
@@ -1527,7 +1535,7 @@
           (outcome?.reason ? ". " + outcome.reason : "");
         queueLogs.push(record);
         finished++;
-        await saveCheckpoint({currentIndex: position, stage: "journal-finished",
+        await saveCheckpoint({currentIndex: outcome?.ok ? position : position - 1, stage: "journal-finished",
           currentJournal: journalIdentity(journal), lessonId: null,
           log: [...(checkpoint.log || []), {
             journal: journalIdentity(journal), at: new Date().toISOString(),
