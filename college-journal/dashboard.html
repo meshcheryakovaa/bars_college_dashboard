@@ -53,16 +53,20 @@
 
     <section class="tools workflow" aria-label="Заполнение занятий">
       <h2>Заполнение журнала</h2>
-      <p class="muted">По каждой дате: назначьте № КТП, нажмите «Привязать КТП», затем «Всем „3“» и «Закрыть занятие». Запись идёт через штатный интерфейс БАРС; неподтверждённые результаты требуют ручной проверки.</p>
+      <p class="muted">Укажите начальный № темы КТП и нажмите «Расставить КТП +1 по датам». Кнопка «ЗАПОЛНИТЬ ЖУРНАЛ ПО ДАТАМ» последовательно привязывает тему, выставляет «3» в пустые ячейки, закрывает, обновляет и проверяет занятие. Неподтверждённые результаты отмечаются отдельно.</p>
       <div id="workflow-select" class="workflow-filter">
         <label>Собранный журнал
           <select id="workflow-journal"><option value="">Выберите журнал</option></select>
         </label>
         <div class="actions">
-          <button type="button" id="workflow-number-all" disabled>Номера КТП = № занятия (пустые)</button>
+          <label class="workflow-ktp-start">Начальный № темы КТП
+            <input id="workflow-ktp-start" type="number" min="1" max="9999" step="1" placeholder="Например, 5">
+          </label>
+          <button type="button" id="workflow-number-all" disabled>Расставить КТП +1 по датам</button>
           <button type="button" id="workflow-bind-all" disabled>Привязать все темы КТП по очереди</button>
           <button type="button" id="workflow-grades-all" disabled>Всем «3» по всем занятиям</button>
           <button type="button" id="workflow-close-all" disabled>Закрыть все занятия</button>
+          <button type="button" id="workflow-fill-dates" disabled>ЗАПОЛНИТЬ ЖУРНАЛ ПО ДАТАМ</button>
           <button type="button" id="workflow-prepare-all">Подготовить локальный план «3»</button>
           <button type="button" id="workflow-reset" disabled>Сбросить план</button>
           <button type="button" id="workflow-stop" disabled>Остановить действие</button>
