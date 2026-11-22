@@ -211,6 +211,7 @@
   async function assignFavoriteKtp(journal, value) {
     if (actionBusy) return;
     const assigned = collegeLessonBatch.assignKtpSequence(journal, value);
+    if (!assigned.length) throw new Error("В журнале нет собранных занятий.");
     const storageKey = keyFor(journal.key);
     const stored = await chrome.storage.local.get([storageKey, prefix + journal.key]);
     const existing = (stored[storageKey] || stored[prefix + journal.key])?.entries || {};
