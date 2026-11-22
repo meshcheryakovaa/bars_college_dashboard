@@ -25,8 +25,11 @@
         gradeAttempted: true, gradeNeedsReview: false});
     } else if (state.grades?.status === "incomplete") {
       // Заполнять только пустые: gradeAll никогда не заменяет 4/5.
-      patch.graded = false;
-      if (entry.gradeAttempted) patch.gradeNeedsReview = false;
+      Object.assign(patch, {
+        graded: false, gradeAttempted: false, gradeNeedsReview: false
+      });
+      // Повтор разрешён после независимой проверки пустых ячеек:
+      // редактор никогда не заменяет уже выставленные 2/3/4/5.
     } else {
       if (entry.gradeAttempted && !entry.graded)
         issues.push("Оценочная колонка не может быть однозначно прочитана.");
