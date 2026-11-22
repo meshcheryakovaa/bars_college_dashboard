@@ -64,6 +64,37 @@ const hooks = (trace, overrides = {}) => ({
   assert(partial.reason.includes("Не подтверждено предыдущее занятие"));
   assert(!fail.includes("close:c"), "Do not close the next lesson when prior confirmation fails.");
 
+  // Восстановление после старой версии: занятие A уже было отправлено,
+  // закрываем B, затем проверяем A без повторной отправки закрытия A.
+  const resumedLog = [];
+  const resumed = await run([lessons[1], lessons[2]], hooks(resumedLog, {
+    initialPending: lessons[0]
+  }));
+  assert.equal(resumed.submitted, 2);
+  assert.equal(resumed.verified, 3);
+  assert.equal(resumed.pending, null);
+  assert.deepEqual(resumedLog.filter((v) => v.startsWith("close:")), ["close:b", "close:c"]);
+  assert.deepEqual(resumedLog.filter((v) => v.startsWith("verify:") || v.startsWith("refresh:")),
+    ["verify:a", "verify:b", "refresh:c"]);
+  const prepareClose = sandbox.collegeLessonBatch.prepareClose;
+  const resumeState = {
+    "a": {closeAttempted: true, closeNeedsReview: true, lastAction: "Закрытие: требует проверки",
+      linked: true, graded: true},
+    "b": {linked: true, graded: true},
+    "c": {linked: true, graded: true}
+  };
+  const resumePlan = prepareClose({lessons}, resumeState);
+  assert.equal(sandbox.collegeLessonBatch.resumableClose(resumePlan, resumeState).id, "a");
+  assert.equal(sandbox.collegeLessonBatch.resumableClose(resumePlan, {
+    ...resumeState, a: {...resumeState.a, lastAction: "Закрытие: неизвестный результат"}
+  }), null, "Cannot resume a request that failed without confirmation it was submitted.");
+  assert.equal(sandbox.collegeLessonBatch.resumableClose(resumePlan, {
+    ...resumeState, a: {...resumeState.a, closeAttempted: false}
+  }), null);
+  assert.equal(sandbox.collegeLessonBatch.resumableClose({
+    ...resumePlan, blocked: [{lesson: lessons[1]}]
+  }, resumeState), null);
+
   const manual = [];
   const stopped = await run(lessons, hooks(manual, {stopped: () => manual.includes("confirmed:a")}));
   assert.equal(stopped.submitted, 2);
