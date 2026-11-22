@@ -9,6 +9,7 @@
   <script defer src="date-range.js"></script>
   <script defer src="dashboard.js"></script>
   <script defer src="catalog-file.js"></script>
+  <script defer src="lesson-batch.js"></script>
   <script defer src="lesson-workflow.js"></script>
 </head>
 <body>
@@ -59,12 +60,17 @@
         </label>
         <div class="actions">
           <button type="button" id="workflow-number-all" disabled>Номера КТП = № занятия (пустые)</button>
+          <button type="button" id="workflow-bind-all" disabled>Привязать все темы КТП по очереди</button>
           <button type="button" id="workflow-prepare-all">Подготовить «3» по всем занятиям</button>
           <button type="button" id="workflow-reset" disabled>Сбросить план</button>
           <button type="button" id="workflow-stop" disabled>Остановить действие</button>
         </div>
       </div>
       <p id="workflow-summary" class="muted"></p>
+      <div id="workflow-batch-status" class="workflow-batch-status" hidden role="status" aria-live="polite">
+        <span id="workflow-batch-text"></span>
+        <progress id="workflow-batch-progress" value="0" max="1"></progress>
+      </div>
       <div class="table-wrap workflow-wrap">
         <table aria-label="План заполнения занятий">
           <thead><tr>
