@@ -8,6 +8,8 @@
   const summary = document.querySelector("#workflow-summary");
   const numberAll = document.querySelector("#workflow-number-all");
   const resetPlan = document.querySelector("#workflow-reset");
+  const stopAction = document.querySelector("#workflow-stop");
+  const prepareAll = document.querySelector("#workflow-prepare-all");
   const selection = document.querySelector("#workflow-select");
   const source = new URLSearchParams(location.search).get("sourceTab");
   const sourceTabId = /^\d+$/.test(source || "") ? Number(source) : null;
@@ -98,12 +100,15 @@
   function renderRows() {
     body.replaceChildren();
     const journal = current();
+    journalSelect.disabled = actionBusy;
+    stopAction.disabled = !actionBusy || sourceTabId === null;
+    prepareAll.disabled = actionBusy || !journal;
     if (!journal) {
       summary.textContent = "Выберите собранный журнал.";
       numberAll.disabled = resetPlan.disabled = true;
       return;
     }
-    numberAll.disabled = resetPlan.disabled = false;
+    numberAll.disabled = resetPlan.disabled = actionBusy;
     const c = count(journal);
     summary.textContent = "Занятий: " + c.total + " · КТП подтверждено: " + c.linked
       + " · Оценки подтверждены: " + c.graded + " · Закрытие подтверждено: " + c.closed
@@ -124,6 +129,7 @@
       entry.step = "1";
       entry.placeholder = "№ темы";
       entry.value = state.ktpNumber || "";
+      entry.disabled = actionBusy;
       entry.setAttribute("aria-label", "№ КТП для " + lesson.date + ", занятие " + lesson.number);
       entry.addEventListener("change", async () => {
         const value = entry.value.trim();
@@ -142,6 +148,7 @@
       grade.append(document.createTextNode("«3» × " + journal.students.length));
       const prepared = checkbox("Подготовлено", Boolean(state.gradesPrepared),
         (checked) => { void storeState(id, {gradesPrepared: checked, graded: false, closed: false}).then(renderRows); });
+      prepared.querySelector("input").disabled = actionBusy;
       grade.append(prepared);
       makeCell(row, grade);
       const checks = document.createElement("div");
@@ -149,17 +156,17 @@
       checks.append(
         checkbox("КТП привязано", Boolean(state.linked), (checked) => {
           void storeState(id, {linked: checked, closed: false}).then(renderRows);
-        }, !state.ktpNumber),
+        }, actionBusy || !state.ktpNumber),
         checkbox("Тройки внесены", Boolean(state.graded), (checked) => {
           void storeState(id, {graded: checked, closed: false}).then(renderRows);
-        }, !state.gradesPrepared),
+        }, actionBusy || !state.gradesPrepared),
         checkbox("Занятие закрыто", Boolean(state.closed), (checked) => {
           if (checked && !window.confirm("Подтвердите, что занятие действительно закрыто в БАРС. Это отметка ручной проверки.")) {
             renderRows();
             return;
           }
           void storeState(id, {closed: checked}).then(renderRows);
-        }, !state.linked || !state.graded)
+        }, actionBusy || !state.linked || !state.graded)
       );
       makeCell(row, checks);
       const actions = document.createElement("div");
@@ -208,6 +215,11 @@
     selection.hidden = !journals.length;
     await loadPlan();
   }
+  stopAction.addEventListener("click", () => {
+    if (sourceTabId === null || !actionBusy) return;
+    void chrome.scripting.executeScript({target: {tabId: sourceTabId}, world: "MAIN",
+      func: () => window.__barsLessonActions?.stop()}).catch((error) => message("Не удалось остановить: " + error.message, true));
+  });
   journalSelect.addEventListener("change", () => {
     selectedKey = journalSelect.value;
     void loadPlan();
