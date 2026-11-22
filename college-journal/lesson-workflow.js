@@ -189,6 +189,7 @@
       await loadEnrollmentSkips(journal);
       const stored = await storeState(String(lesson.id), {
         graded: false, gradeAttempted: false, gradeNeedsReview: false,
+        gradeReport: null,
         lastAction: "Зачисление: повторная проверка разрешена",
         lastActionAt: new Date().toISOString()
       });
@@ -691,8 +692,11 @@
     const keys = journal.students.map(({id}) => model.storageKey(task, id));
     const recorded = await chrome.storage.local.get(keys);
     task.enrollmentSkips = Object.fromEntries(
-      journal.students.map(({id}) => [String(id), recorded[model.storageKey(task, id)]])
-        .filter(([, skip]) => skip));
+      journal.students.map(({id, name}) =>
+        [String(id), recorded[model.storageKey(task, id)], name])
+        .filter(([id, skip, name]) => skip &&
+          model.validSkip(skip, task, id) && model.same(skip.studentName, name))
+        .map(([id, skip]) => [id, skip]));
     return task;
   }
 
