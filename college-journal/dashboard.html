@@ -9,6 +9,7 @@
   <script defer src="date-range.js"></script>
   <script defer src="dashboard.js"></script>
   <script defer src="catalog-file.js"></script>
+  <script defer src="lesson-workflow.js"></script>
 </head>
 <body>
   <main class="dashboard">
@@ -48,6 +49,31 @@
       <div><dt>Студенты</dt><dd id="student-count">0</dd></div>
       <div><dt>Занятия</dt><dd id="lesson-count">0</dd></div>
     </dl>
+
+    <section class="tools workflow" aria-label="Заполнение занятий">
+      <h2>Заполнение журнала</h2>
+      <p class="muted">План по ID занятия: тема КТП → оценки «3» → закрытие. Номера и отметки хранятся локально; изменения в БАРС подтверждайте после выполнения через интерфейс сайта.</p>
+      <div id="workflow-select" class="workflow-filter">
+        <label>Собранный журнал
+          <select id="workflow-journal"><option value="">Выберите журнал</option></select>
+        </label>
+        <div class="actions">
+          <button type="button" id="workflow-number-all" disabled>Номера КТП = № занятия (пустые)</button>
+          <button type="button" id="workflow-prepare-all">Подготовить «3» по всем занятиям</button>
+          <button type="button" id="workflow-reset" disabled>Сбросить план</button>
+        </div>
+      </div>
+      <p id="workflow-summary" class="muted"></p>
+      <div class="table-wrap workflow-wrap">
+        <table aria-label="План заполнения занятий">
+          <thead><tr>
+            <th>Дата</th><th>№ занятия</th><th>№ темы КТП</th><th>План оценок</th><th>Подтверждение выполнения</th><th>Открыть в БАРС</th>
+          </tr></thead>
+          <tbody id="workflow-rows"></tbody>
+        </table>
+      </div>
+      <p id="workflow-status" class="muted" role="status" aria-live="polite"></p>
+    </section>
 
     <section class="data" aria-label="Собранные данные">
       <nav class="views" aria-label="Вид данных">
