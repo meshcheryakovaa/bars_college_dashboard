@@ -375,6 +375,22 @@
       : {status: "unknown", topic: null};
   }
 
+  function evaluateGradeValues(values) {
+    if (!Array.isArray(values) || !values.length || values.some((v) => v == null))
+      return {status: "unknown", counts: {}};
+    const blanks = values.filter((value) => value === "" || value === "—" || value === "-").length;
+    const others = values.filter((value) => value !== "" && value !== "—" && value !== "-" &&
+      value !== "3").length;
+    const valid = values.filter((value) => /^[2-5]$/.test(value)).length;
+    return {
+      status: blanks === 0 && valid === values.length ? "complete" :
+        blanks ? "incomplete" : "unknown",
+      counts: {total: values.length, empty: blanks, nonThree: others,
+        threes: values.filter((value) => value === "3").length},
+      values
+    };
+  }
+
   function currentGrades(task, info) {
     const cmp = gridComponent(info);
     const column = cmp && gradeColumn(info, cmp);
@@ -384,15 +400,7 @@
       const cell = row.querySelector("td." + cls);
       return cell && shown(cell) ? clean(cell.textContent) : null;
     });
-    if (values.some((value) => value === null)) return {status: "unknown", counts: {}};
-    const blanks = values.filter((value) => value === "" || value === "—" || value === "-").length;
-    const others = values.filter((value) => value !== "" && value !== "—" && value !== "-" &&
-      value !== "3").length;
-    const valid = values.filter((value) => /^[2-5]$/.test(value)).length;
-    return {status: blanks === 0 && valid === values.length ? "complete"
-      : blanks ? "incomplete" : "unknown",
-      counts: {total: values.length, empty: blanks, nonThree: others,
-        threes: values.filter((value) => value === "3").length}, values};
+    return evaluateGradeValues(values);
   }
 
   async function inspectState(task, info, net, refresh = false) {
@@ -497,5 +505,5 @@
       running = false;
     }
   }
-  window.__barsLessonActions = {version: 4, run, stop() {stopRequested = true;}};
+  window.__barsLessonActions = {version: 4, run, evaluateGradeValues, stop() {stopRequested = true;}};
 })();
