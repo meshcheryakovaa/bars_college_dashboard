@@ -154,3 +154,10 @@ input[type="checkbox"] { width: auto; margin: 0 4px 0 0; accent-color: var(--acc
   .workflow-favorite { flex-wrap: wrap; }
   .workflow-favorite label { flex-basis: 100%; }
 }
+
+/* Whole-queue preflight: distinguish blocked journals without decorative badges. */
+.workflow-preflight-result { max-height: 280px; overflow-y: auto; display: grid; gap: 6px; margin: 8px 0; }
+.workflow-preflight-result:empty { display: none; }
+.workflow-preflight-result p { margin: 0; padding: 9px 12px; border: 1px solid var(--border); border-radius: 6px; overflow-wrap: anywhere; font-size: 13px; }
+.workflow-preflight-result p[data-ready="false"] { border-color: #e1c5ca; background: #fff9f9; }
+#workflow-resume-queue:not(:disabled), #workflow-preflight:not(:disabled) { font-weight: 600; }
