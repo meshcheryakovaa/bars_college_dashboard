@@ -154,7 +154,12 @@
         continue;
       }
     }
-    for (const journal of journals) {
+    const choices = [...new Map(journals.map((j) => [journalIdentity(j), j])).values()];
+    const ordered = [
+      ...favoriteIds.map((id) => available.get(id)).filter(Boolean),
+      ...choices.filter((j) => !favoriteIds.includes(journalIdentity(j)))
+    ];
+    for (const journal of ordered) {
       const id = journalIdentity(journal);
       const position = favoriteIds.indexOf(id);
       const item = document.createElement("div");
@@ -183,9 +188,62 @@
           move.title = offset < 0 ? "Выше в очереди" : "Ниже в очереди";
           item.append(move);
         }
+        const start = document.createElement("input");
+        start.type = "number";
+        start.min = "1";
+        start.max = "9999";
+        start.step = "1";
+        start.className = "workflow-favorite-start";
+        start.placeholder = "Начало КТП";
+        start.setAttribute("aria-label", "Начальный номер КТП для " + title(journal));
+        start.disabled = actionBusy;
+        const setNumbers = button("КТП +1", () => {
+          void assignFavoriteKtp(journal, start.value).catch((error) => {
+            queueStatus.textContent = "Ошибка КТП для " + title(journal) + ": " + error.message;
+          });
+        }, actionBusy);
+        item.append(start, setNumbers);
       }
       favoriteList.append(item);
     }
+  }
+
+  async function assignFavoriteKtp(journal, value) {
+    if (actionBusy) return;
+    const assigned = collegeLessonBatch.assignKtpSequence(journal, value);
+    const storageKey = keyFor(journal.key);
+    const stored = await chrome.storage.local.get([storageKey, prefix + journal.key]);
+    const existing = (stored[storageKey] || stored[prefix + journal.key])?.entries || {};
+    const conflicts = assigned.filter(({lesson, ktpNumber}) => {
+      const state = existing[String(lesson.id)] || {};
+      return state.ktpNumber && String(state.ktpNumber) !== ktpNumber &&
+        (state.linked || state.bindAttempted || state.bindNeedsReview ||
+          state.graded || state.gradeAttempted || state.gradeNeedsReview ||
+          state.closed || state.closeAttempted || state.closeNeedsReview);
+    });
+    if (conflicts.length) {
+      throw new Error("Номера КТП не изменены: " + conflicts.length +
+        " занятий уже обрабатывались с другими темами. Сверьте их в БАРС.");
+    }
+    const updated = {...existing};
+    for (const {lesson, ktpNumber} of assigned) {
+      const id = String(lesson.id), state = existing[id] || {};
+      if (String(state.ktpNumber || "") === ktpNumber) continue;
+      updated[id] = {...state, ktpNumber, linked: false,
+        bindAttempted: false, bindNeedsReview: false,
+        lastAction: "", lastActionAt: ""};
+    }
+    await chrome.storage.local.set({[storageKey]: {
+      version: 1, entries: updated, updatedAt: Date.now()
+    }});
+    if (selectedKey === journal.key) {
+      plans = updated;
+      ktpStart.value = String(value);
+      renderRows();
+    }
+    queueStatus.textContent = "КТП назначены для " + title(journal) +
+      ": темы № " + assigned[0].ktpNumber + "–" +
+      assigned[assigned.length - 1].ktpNumber + ". Данные БАРС пока не изменялись.";
   }
 
   async function saveFavorites() {
