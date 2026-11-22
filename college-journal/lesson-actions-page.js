@@ -263,7 +263,6 @@
     const store = cmp.getStore();
     assert(store.getCount() === info.rightRows.length, "Сетка студентов изменилась. Оценки не менялись.");
     let changed = 0, alreadyThree = 0, other = 0;
-    const config = cmp.getColumnModel().config[col.i];
     const columnKey = "x-grid3-td-" + col.colId;
     for (let i = 0; i < store.getCount(); i++) {
       check();
@@ -287,26 +286,58 @@
       await sleep(120);
     }
     const total = store.getCount();
+    let verified = false;
+    let readback = "";
+    if (other === 0 && changed + alreadyThree === total) {
+      try {
+        const checkpoint = net.entries.length;
+        button(info.win, "refresh_btn").click();
+        await net.completed("lessons_tab_rows", checkpoint, 16000);
+        const refreshed = scope(task);
+        const refreshedGrid = gridComponent(refreshed);
+        const refreshedCol = refreshedGrid && gradeColumn(refreshed, refreshedGrid);
+        assert(refreshedCol, "После обновления не удалось определить оценочную колонку.");
+        const className = "x-grid3-td-" + refreshedCol.colId;
+        const saved = refreshed.rightRows.filter((row) =>
+          clean(row.querySelector("td." + className)?.textContent) === "3").length;
+        verified = saved === total;
+        readback = " После повторной загрузки подтверждено оценок «3»: " + saved + " из " + total + ".";
+      } catch (error) {
+        if (stopRequested) throw error;
+        readback = " Повторная проверка не завершилась: " + error.message;
+      }
+    }
     return {
-      ok: true, verified: other === 0 && changed + alreadyThree === total,
+      ok: true, verified,
       affected: changed,
       skippedExisting: other,
       message: "Сохранение оценок: новые «3» — " + changed + ", уже «3» — " + alreadyThree +
-        ", другие существующие значения сохранены без изменения — " + other + "."
+        ", другие существующие значения сохранены без изменения — " + other + "." + readback
+        + (verified ? "" : " Проверьте оценки в БАРС перед подтверждением.")
     };
   }
   async function closeLesson(task, info, net) {
     selectLesson(info);
+    const beforeDialogs = new Set(dialogs(info));
     const checkpoint = net.entries.length;
     button(info.win, "close_lesson_btn").click();
     await net.completed("lessons_tab_close_lesson_action", checkpoint);
     await until(() => net.entries.slice(checkpoint).some((item) => item.path.endsWith("/lessons_tab_rows")),
       15000, "Запрос закрытия выполнен, но обновление таблицы не подтверждено.");
-    const modal = dialogs(info).find((win) => /закры|подтверж/i.test(windowTitle(win)));
+    const modal = dialogs(info).find((win) => !beforeDialogs.has(win));
     if (modal) return {ok: true, verified: false,
       message: "Запрос закрытия выполнен. Проверьте дополнительное окно БАРС и подтвердите закрытие вручную."};
+    const refreshed = scope(task);
+    selectLesson(refreshed);
+    await sleep(250);
+    const close = refreshed.win.querySelector("#close_lesson_btn");
+    const reopen = refreshed.win.querySelector("#open_lesson_btn");
+    const disabled = (node) => !node || node.classList.contains("x-item-disabled")
+      || Boolean(node.querySelector("button")?.disabled);
+    if (disabled(close) && !disabled(reopen)) return {ok: true, verified: true,
+      message: "Занятие закрыто: после обновления «Закрыть занятие» отключено, а «Открыть занятие» доступно."};
     return {ok: true, verified: false,
-      message: "БАРС выполнил запрос закрытия и обновил журнал. Проверьте статус занятия на сайте: лог не показывает поле закрытия."};
+      message: "Запрос закрытия и обновление журнала завершены, но статус не определён. Проверьте закрытие в БАРС."};
   }
   async function run(task) {
     if (running) return {ok: false, message: "Уже выполняется операция в этом журнале."};
