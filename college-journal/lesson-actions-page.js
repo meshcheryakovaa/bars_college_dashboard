@@ -464,8 +464,10 @@
       skipNames: skippedNames,
       message: "Занятие " + (model.fullDate(task.date, task.period) || task.date) +
         ": выставлено " + changed + " оценок, сохранено " +
-        (alreadyThree + other) + " существующих, пропущено " + skippedNonEnrolled +
-        " студентов — не числились в группе на дату занятия." +
+        (alreadyThree + other) + " существующих, " +
+        (skippedNonEnrolled === 1 ? "пропущен 1 студент" :
+          "пропущено " + skippedNonEnrolled + " студентов") +
+        " — не числились в группе на дату занятия." +
         (skippedNames.length ? " Студенты: " + skippedNames.join("; ") + "." : "") +
         readback +
         (verified ? "" : " Итоговая проверка не подтверждена; требуется сверка.")
