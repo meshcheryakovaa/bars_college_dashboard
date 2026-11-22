@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Сборщик журналов колледжа",
-  "version": "1.5.2",
-  "description": "Собирает список студентов и даты занятий из журналов, которые вы открываете в одной вкладке.",
+  "version": "1.6.0",
+  "description": "Собирает журналы и помогает планировать привязку КТП, оценивание и закрытие занятий.",
   "permissions": ["activeTab", "scripting", "storage"],
   "background": {"service_worker": "background.js"},
   "action": {"default_popup": "popup.html"}
