@@ -1,4 +1,4 @@
-/* План заполнения журнала. Данные плана локальные; запись в БАРС выполняет пользователь. */
+/* План заполнения и проверяемые действия через штатный UI БАРС. */
 (() => {
   "use strict";
   const prefix = "workflow:plan:";
@@ -15,6 +15,7 @@
   let selectedKey = "";
   let plans = {};
   let saving = false;
+  let actionBusy = false;
 
   const keyFor = (key) => {
     const journal = journals.find((item) => item.key === key);
@@ -153,7 +154,7 @@
           void storeState(id, {graded: checked, closed: false}).then(renderRows);
         }, !state.gradesPrepared),
         checkbox("Занятие закрыто", Boolean(state.closed), (checked) => {
-          if (checked && !window.confirm("Подтвердите, что занятие действительно закрыто в БАРС. Дашборд сам не меняет статус на сервере.")) {
+          if (checked && !window.confirm("Подтвердите, что занятие действительно закрыто в БАРС. Это отметка ручной проверки.")) {
             renderRows();
             return;
           }
@@ -164,10 +165,20 @@
       const actions = document.createElement("div");
       actions.className = "workflow-actions";
       actions.append(
-        button("КТП", () => void openLesson(journal, lesson, "ktp"), sourceTabId === null),
-        button("Оценки", () => void openLesson(journal, lesson, "grades"), sourceTabId === null),
-        button("Закрытие", () => void openLesson(journal, lesson, "close"), sourceTabId === null)
+        button("Сверить", () => void runLessonAction(journal, lesson, "check"), actionBusy || sourceTabId === null),
+        button("Привязать КТП", () => void runLessonAction(journal, lesson, "bind"),
+          actionBusy || sourceTabId === null || !state.ktpNumber),
+        button("Всем «3»", () => void runLessonAction(journal, lesson, "grades"),
+          actionBusy || sourceTabId === null),
+        button("Закрыть занятие", () => void runLessonAction(journal, lesson, "close"),
+          actionBusy || sourceTabId === null || !state.linked || !state.graded)
       );
+      if (state.lastAction) {
+        const info = document.createElement("small");
+        info.className = "workflow-last";
+        info.textContent = state.lastAction;
+        actions.append(info);
+      }
       makeCell(row, actions);
       body.append(row);
     }
@@ -236,6 +247,81 @@
     renderRows();
     message("Тройки подготовлены для " + journal.lessons.length + " занятий. Внесите их в БАРС и подтвердите по каждому занятию.");
   });
+
+  async function runLessonAction(journal, lesson, action) {
+    if (actionBusy) return;
+    if (sourceTabId === null) {
+      message("Откройте дашборд с вкладки Электронного колледжа через меню расширения.", true);
+      return;
+    }
+    const currentState = stateFor(String(lesson.id));
+    if (action === "bind" && !validNumber(String(currentState.ktpNumber || "")) || action === "bind" && !currentState.ktpNumber) {
+      message("Укажите номер темы КТП для выбранного занятия.", true);
+      return;
+    }
+    if (action === "close" && (!currentState.linked || !currentState.graded)) {
+      message("Перед закрытием подтвердите привязку КТП и внесение троек.", true);
+      return;
+    }
+    const prompts = {
+      bind: "Привязать тему КТП № " + currentState.ktpNumber + " к занятию " + lesson.number
+        + " (" + lesson.date + ")? Будет вызвана штатная команда БАРС.",
+      grades: "Выставить оценку «3» студентам (" + journal.students.length + ") в занятии "
+        + lesson.number + "? Существующие непустые оценки не будут перезаписаны.",
+      close: "Закрыть занятие " + lesson.number + " (" + lesson.date + ") в БАРС? Это изменит состояние занятия на сервере."
+    };
+    if (prompts[action] && !window.confirm(prompts[action])) return;
+    actionBusy = true;
+    renderRows();
+    message("Выполняется «" + ({bind: "Привязать КТП", grades: "Всем 3", close: "Закрыть", check: "Сверить"}[action]) +
+      "» для занятия № " + lesson.number + ". Не переключайте группу или дисциплину в БАРС.");
+    try {
+      const tab = await chrome.tabs.update(sourceTabId, {active: true});
+      await chrome.windows.update(tab.windowId, {focused: true});
+      const target = {tabId: sourceTabId};
+      await chrome.scripting.executeScript({target, world: "MAIN", files: ["lesson-actions-page.js"]});
+      const payload = {
+        action,
+        origin: journal.origin,
+        group: journal.group,
+        subject: journal.subject,
+        practical: journal.kind === "practical",
+        lessonId: String(lesson.id),
+        number: String(lesson.number),
+        date: String(lesson.date),
+        ktpNumber: String(currentState.ktpNumber || ""),
+        studentIds: journal.students.map((student) => String(student.id))
+      };
+      const output = await chrome.scripting.executeScript({
+        target,
+        world: "MAIN",
+        func: (data) => window.__barsLessonActions.run(data),
+        args: [payload]
+      });
+      const result = output?.[0]?.result;
+      if (!result || typeof result.ok !== "boolean") throw new Error("БАРС не вернул состояние операции.");
+      if (result.ok && action !== "check") {
+        const patch = {
+          lastAction: ({bind: "КТП", grades: "Оценки", close: "Закрытие"}[action] || action)
+            + ": " + (result.verified ? "подтверждено" : "требует проверки"),
+          lastActionAt: new Date().toISOString()
+        };
+        if (result.verified && action === "bind") patch.linked = true;
+        if (result.verified && action === "grades") {
+          patch.gradesPrepared = true;
+          patch.graded = true;
+        }
+        if (result.verified && action === "close") patch.closed = true;
+        await storeState(String(lesson.id), patch);
+      }
+      message((result.ok ? "" : "Не выполнено: ") + result.message, !result.ok);
+    } catch (error) {
+      message("Ошибка обращения к БАРС: " + error.message, true);
+    } finally {
+      actionBusy = false;
+      renderRows();
+    }
+  }
 
   // Встраиваемая навигация ничего не записывает на сервер: только сверяет и подсвечивает колонку.
   async function openLesson(journal, lesson, mode) {
