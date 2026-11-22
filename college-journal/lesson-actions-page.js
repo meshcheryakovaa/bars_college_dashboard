@@ -80,12 +80,39 @@
     }
     return {win, grid, right, left, rightRows, header, headers, lessonKey: key(header)};
   }
+  // В БАРС занятие выбирают нажатием на нижний заголовок «Пос»
+  // (посещаемость), а НЕ на групповой заголовок «(№) - дата».
+  // Опираемся на скрытый столбец ID занятия: одинаковые даты могут повторяться.
+  function attendanceHeader(info) {
+    const headers = [...info.right.querySelectorAll(".x-grid3-header td.x-grid3-hd.x-grid3-cell")];
+    const start = headers.findIndex((node) => key(node) === info.lessonKey);
+    assert(start >= 0, "Не найден скрытый заголовок ID выбранного занятия.");
+    assert(!shown(headers[start]), "Изменилась структура скрытого ID занятия; выбор остановлен.");
+
+    const current = info.headers.findIndex((node) => node === info.header);
+    assert(current >= 0, "Заголовок выбранного занятия изменился.");
+    const nextKey = info.headers[current + 1] && key(info.headers[current + 1]);
+    const nextIndex = nextKey
+      ? headers.findIndex((node, index) => index > start && key(node) === nextKey)
+      : headers.length;
+    assert(nextIndex > start, "Не определены границы столбцов выбранного занятия.");
+
+    const candidates = headers.slice(start + 1, nextIndex)
+      .filter((node) => shown(node) && /^пос\.?$/i.test(clean(node.textContent)));
+    assert(candidates.length === 1,
+      "Не найден единственный заголовок «Пос» под выбранной датой. Никаких изменений в БАРС не сделано.");
+    return candidates[0];
+  }
+
   function selectLesson(info) {
-    info.header.scrollIntoView({block: "center", inline: "center"});
-    const el = info.header;
-    el.dispatchEvent(new MouseEvent("mousedown", {bubbles: true, cancelable: true, view: window}));
-    el.dispatchEvent(new MouseEvent("mouseup", {bubbles: true, cancelable: true, view: window}));
-    el.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true, view: window}));
+    const el = attendanceHeader(info);
+    el.scrollIntoView({block: "center", inline: "center"});
+    // События должны всплыть до обработчика заголовка Ext JS.
+    // Нажатие на верхнюю строку даты не изменяет выбранное занятие.
+    for (const type of ["mousedown", "mouseup", "click"]) {
+      el.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true, view: window}));
+    }
+    return el;
   }
   function button(win, id) {
     const wrapper = win.querySelector("#" + id);
