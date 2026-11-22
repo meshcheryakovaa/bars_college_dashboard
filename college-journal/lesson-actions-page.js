@@ -231,8 +231,17 @@
     await until(() => net.entries.slice(checkpoint).some(
       (item) => item.path.endsWith("/lessons_tab_rows")), 14000,
     "Привязка отправлена, но обновление журнала не подтверждено.");
-    return {ok: true, verified: false, affected: 1,
-      message: "Запрос привязки темы № " + n + " завершён и строки журнала обновлены. Проверьте тему в БАРС и отметьте привязку."};
+    const afterBinding = scope(task);
+    const bound = readBoundKtp(afterBinding);
+    const verified = bound.status === "confirmed" && bound.topic === n;
+    return {
+      ok: bound.status !== "confirmed" || verified,
+      verified, affected: 1, actualTopic: bound.topic,
+      message: bound.status === "confirmed"
+        ? (verified ? "Тема КТП № " + n + " подтверждена повторным чтением."
+          : "Обнаружена другая тема КТП № " + bound.topic + ", ожидалась № " + n + ".")
+        : "Запрос КТП № " + n + " выполнен, но в таблице нет однозначного номера темы для подтверждения. Не повторяйте привязку без сверки."
+    };
   }
   function gridComponent(info) {
     const ext = window.Ext;
@@ -315,20 +324,20 @@
     const total = store.getCount();
     let verified = false;
     let readback = "";
-    if (other === 0 && changed + alreadyThree === total) {
+    if (changed + alreadyThree + other === total) {
       try {
         const checkpoint = net.entries.length;
         button(info.win, "refresh_btn").click();
         await net.completed("lessons_tab_rows", checkpoint, 16000);
         const refreshed = scope(task);
-        const refreshedGrid = gridComponent(refreshed);
-        const refreshedCol = refreshedGrid && gradeColumn(refreshed, refreshedGrid);
-        assert(refreshedCol, "После обновления не удалось определить оценочную колонку.");
-        const className = "x-grid3-td-" + refreshedCol.colId;
-        const saved = refreshed.rightRows.filter((row) =>
-          clean(row.querySelector("td." + className)?.textContent) === "3").length;
-        verified = saved === total;
-        readback = " После повторной загрузки подтверждено оценок «3»: " + saved + " из " + total + ".";
+        const reread = currentGrades(task, refreshed);
+        verified = reread.status === "complete";
+        readback = " После обновления проверено оценок: " +
+          (reread.counts.total || 0) + "; троек: " +
+          (reread.counts.threes || 0) + "; сохранённых других оценок: " +
+          (reread.counts.nonThree || 0) + "; пустых: " +
+          (reread.counts.empty || 0) + ".";
+        // Уже выставленные оценки 2/4/5 не перезаписываются.
       } catch (error) {
         if (stopRequested) throw error;
         readback = " Повторная проверка не завершилась: " + error.message;
