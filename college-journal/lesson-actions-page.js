@@ -1,7 +1,7 @@
 /* Запись через штатные Ext JS обработчики БАРС, без прямых запросов к API. */
 (() => {
   "use strict";
-  if (window.__barsLessonActions?.version === 2) return;
+  if (window.__barsLessonActions?.version === 3) return;
   const clean = (x) => String(x ?? "").replace(/\s+/g, " ").trim();
   const shown = (x) => Boolean(x?.isConnected && x.getClientRects().length);
   const cells = (row) => [...row.querySelectorAll("td.x-grid3-cell")];
@@ -343,28 +343,53 @@
         + (verified ? "" : " Проверьте оценки в БАРС перед подтверждением.")
     };
   }
-  async function closeLesson(task, info, net) {
+  // BARS обновляет доступность команд закрытия с задержкой на одно
+  // закрытое занятие. Отправка и проверка поэтому разделены на две операции.
+  async function verifyClosed(task, info, net, refresh = false) {
+    if (refresh) {
+      const checkpoint = net.entries.length;
+      button(info.win, "refresh_btn").click();
+      await net.completed("lessons_tab_rows", checkpoint, 16000);
+    }
+    let current = scope(task);
+    selectLesson(current);
+    await sleep(400);
+    current = scope(task);
+    const close = current.win.querySelector("#close_lesson_btn");
+    const reopen = current.win.querySelector("#open_lesson_btn");
+    assert(close && reopen, "Не найдены обе штатные кнопки состояния занятия.");
+    const disabled = (node) => node.classList.contains("x-item-disabled")
+      || Boolean(node.querySelector("button")?.disabled);
+    const closed = disabled(close) && !disabled(reopen);
+    return {
+      ok: true, verified: closed,
+      message: closed
+        ? "Занятие № " + task.number + " (" + task.date +
+          ") отображается как закрытое: открыть доступно, закрыть недоступно."
+        : "Для занятия № " + task.number + " (" + task.date +
+          ") БАРС пока не показывает подтверждённое закрытие." +
+          (refresh ? " Повторное обновление не подтвердило статус." :
+            " Проверьте его после следующего закрытия.")
+    };
+  }
+  async function closeLesson(task, info, net, deferVerification = false) {
     selectLesson(info);
     const beforeDialogs = new Set(dialogs(info));
     const checkpoint = net.entries.length;
     button(info.win, "close_lesson_btn").click();
     await net.completed("lessons_tab_close_lesson_action", checkpoint);
-    await until(() => net.entries.slice(checkpoint).some((item) => item.path.endsWith("/lessons_tab_rows")),
-      15000, "Запрос закрытия выполнен, но обновление таблицы не подтверждено.");
+    await net.completed("lessons_tab_rows", checkpoint);
     const modal = dialogs(info).find((win) => !beforeDialogs.has(win));
-    if (modal) return {ok: true, verified: false,
-      message: "Запрос закрытия выполнен. Проверьте дополнительное окно БАРС и подтвердите закрытие вручную."};
-    const refreshed = scope(task);
-    selectLesson(refreshed);
-    await sleep(250);
-    const close = refreshed.win.querySelector("#close_lesson_btn");
-    const reopen = refreshed.win.querySelector("#open_lesson_btn");
-    const disabled = (node) => !node || node.classList.contains("x-item-disabled")
-      || Boolean(node.querySelector("button")?.disabled);
-    if (disabled(close) && !disabled(reopen)) return {ok: true, verified: true,
-      message: "Занятие закрыто: после обновления «Закрыть занятие» отключено, а «Открыть занятие» доступно."};
-    return {ok: true, verified: false,
-      message: "Запрос закрытия и обновление журнала завершены, но статус не определён. Проверьте закрытие в БАРС."};
+    if (modal) return {
+      ok: false, verified: false,
+      message: "БАРС открыл дополнительный диалог при закрытии. Подтвердите его вручную; пакет остановлен."
+    };
+    if (deferVerification) return {
+      ok: true, verified: false, pending: true,
+      message: "Запрос закрытия занятия № " + task.number +
+        " выполнен. Статус будет проверен после закрытия следующего занятия."
+    };
+    return verifyClosed(task, scope(task), net, false);
   }
   async function run(task) {
     if (running) return {ok: false, message: "Уже выполняется операция в этом журнале."};
@@ -379,7 +404,10 @@
       const result = task.action === "bind" ? await bindKtp(task, info, net)
         : task.action === "grades" ? await gradeAll(task, info, net)
           : task.action === "close" ? await closeLesson(task, info, net)
-            : (() => {throw new Error("Неизвестное действие.");})();
+            : task.action === "closeBatch" ? await closeLesson(task, info, net, true)
+              : task.action === "verifyClose" ? await verifyClosed(task, info, net, false)
+                : task.action === "verifyCloseFinal" ? await verifyClosed(task, info, net, true)
+                  : (() => {throw new Error("Неизвестное действие.");})();
       return result;
     } catch (error) {
       return {ok: false, verified: false, message: error.message};
@@ -388,5 +416,5 @@
       running = false;
     }
   }
-  window.__barsLessonActions = {version: 2, run, stop() {stopRequested = true;}};
+  window.__barsLessonActions = {version: 3, run, stop() {stopRequested = true;}};
 })();
