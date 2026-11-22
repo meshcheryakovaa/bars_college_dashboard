@@ -386,18 +386,38 @@
     assert(cmp, "Не определён штатный редактор сетки Ext JS. Оценки не менялись.");
     const col = gradeColumn(info, cmp);
     assert(col, "Не определён однозначно столбец оценок. В БАРС выберите одну ячейку оценки нужного занятия и повторите.");
+    const model = window.__barsEnrollmentSkip;
+    assert(model, "Модуль проверки предупреждений о зачислении не загружен.");
+    assert(info.studentRowIds?.length === info.rightRows.length,
+      "Не удалось сопоставить строки с ID студентов.");
     const store = cmp.getStore();
     assert(store.getCount() === info.rightRows.length, "Сетка студентов изменилась. Оценки не менялись.");
-    let changed = 0, alreadyThree = 0, other = 0;
+    const students = new Map((task.students || []).map(({id, name}) => [String(id), {id: String(id), name}]));
+    assert(students.size === info.rightRows.length,
+      "Имена студентов не совпадают с таблицей. Пересоберите журнал.");
+    task.enrollmentSkips ||= {};
+    let changed = 0, alreadyThree = 0, other = 0, skippedNonEnrolled = 0;
+    const skippedNames = [];
     const columnKey = "x-grid3-td-" + col.colId;
     for (let i = 0; i < store.getCount(); i++) {
       check();
+      const id = String(info.studentRowIds[i]);
+      const student = students.get(id);
+      assert(student, "ID студента № " + (i + 1) + " не найден в журнале.");
       const active = info.rightRows[i]?.querySelector("td." + columnKey);
       assert(active && shown(active), "Изменилась таблица оценок, операция прервана после " + changed + " студентов.");
       const existing = clean(active.textContent);
       if (existing === "3") { alreadyThree++; continue; }
       if (existing && existing !== "—" && existing !== "-") { other++; continue; }
-      assert(cmp.getColumnModel().isCellEditable?.(col.i, i), "Ячейка студента № " + (i + 1) + " недоступна.");
+      if (model.validSkip(task.enrollmentSkips[id], task, id)) {
+        skippedNonEnrolled++;
+        skippedNames.push(student.name);
+        continue;
+      }
+      assert(!visibleNotice(info),
+        "Перед вводом оценки БАРС показывает другое окно. Необходимо закрыть его вручную.");
+      assert(cmp.getColumnModel().isCellEditable?.(col.i, i),
+        "Ячейка студента № " + (i + 1) + " недоступна.");
       const checkpoint = net.entries.length;
       cmp.startEditing(i, col.i);
       const editor = await until(() => cmp.activeEditor?.field?.setValue && cmp.activeEditor, 3000,
@@ -407,14 +427,20 @@
       editor.field.setValue("3");
       editor.completeEdit?.();
       if (cmp.activeEditor === editor) cmp.stopEditing?.();
-      await net.completed("save_lesson_score", checkpoint, 12000);
-      changed++;
+      // Save response and warning are awaited concurrently via polling.
+      const result = await waitForScoreOrNotice(task, info, net, checkpoint, student);
+      if (result.kind === "skipped") {
+        task.enrollmentSkips[id] = result.skip;
+        skippedNonEnrolled++;
+        skippedNames.push(student.name);
+      } else {
+        changed++;
+      }
       await sleep(120);
     }
     const total = store.getCount();
-    let verified = false;
-    let readback = "";
-    if (changed + alreadyThree + other === total) {
+    let verified = false, readback = "";
+    if (changed + alreadyThree + other + skippedNonEnrolled === total) {
       try {
         const checkpoint = net.entries.length;
         button(info.win, "refresh_btn").click();
@@ -422,24 +448,27 @@
         const refreshed = scope(task);
         const reread = currentGrades(task, refreshed);
         verified = reread.status === "complete";
-        readback = " После обновления проверено оценок: " +
-          (reread.counts.total || 0) + "; троек: " +
-          (reread.counts.threes || 0) + "; сохранённых других оценок: " +
-          (reread.counts.nonThree || 0) + "; пустых: " +
-          (reread.counts.empty || 0) + ".";
-        // Уже выставленные оценки 2/4/5 не перезаписываются.
+        const c = reread.counts;
+        readback = " Повторная проверка: оценок — " +
+          (c.scored || c.threes + c.nonThree || 0) + ", подтверждённых пропусков — " +
+          (c.skippedNonEnrolled || 0) + ", неопределённых пустых ячеек — " + (c.empty || 0) + ".";
       } catch (error) {
         if (stopRequested) throw error;
         readback = " Повторная проверка не завершилась: " + error.message;
       }
     }
     return {
-      ok: true, verified,
-      affected: changed,
-      skippedExisting: other,
-      message: "Сохранение оценок: новые «3» — " + changed + ", уже «3» — " + alreadyThree +
-        ", другие существующие значения сохранены без изменения — " + other + "." + readback
-        + (verified ? "" : " Проверьте оценки в БАРС перед подтверждением.")
+      ok: true, verified, affected: changed,
+      skippedExisting: alreadyThree + other,
+      skippedNonEnrolled,
+      skipNames: skippedNames,
+      message: "Занятие " + (model.fullDate(task.date, task.period) || task.date) +
+        ": выставлено " + changed + " оценок, сохранено " +
+        (alreadyThree + other) + " существующих, пропущено " + skippedNonEnrolled +
+        " студентов — не числились в группе на дату занятия." +
+        (skippedNames.length ? " Студенты: " + skippedNames.join("; ") + "." : "") +
+        readback +
+        (verified ? "" : " Итоговая проверка не подтверждена; требуется сверка.")
     };
   }
 
@@ -490,7 +519,10 @@
       const cell = row.querySelector("td." + cls);
       return cell && shown(cell) ? clean(cell.textContent) : null;
     });
-    return evaluateGradeValues(values);
+    const model = window.__barsEnrollmentSkip;
+    return model && info.studentRowIds?.length === values.length
+      ? model.evaluate(values, info.studentRowIds, task.enrollmentSkips || {}, task)
+      : evaluateGradeValues(values);
   }
 
   async function inspectState(task, info, net, refresh = false) {
@@ -595,5 +627,5 @@
       running = false;
     }
   }
-  window.__barsLessonActions = {version: 4, run, evaluateGradeValues, stop() {stopRequested = true;}};
+  window.__barsLessonActions = {version: 5, run, evaluateGradeValues, stop() {stopRequested = true;}};
 })();
