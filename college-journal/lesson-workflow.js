@@ -305,7 +305,7 @@
     if (sourceTabId === null) throw new Error(
       "Откройте дашборд из меню расширения на вкладке Электронного колледжа.");
     const target = {tabId: sourceTabId};
-    // Do not use chrome.tabs.update(active:true) or chrome.windows.update(focused:true).
+    // Only inject into the existing tab. Never activate that tab or focus its window.
     await chrome.scripting.executeScript({target, world: "MAIN", files: ["lesson-actions-page.js"]});
     const output = await chrome.scripting.executeScript({
       target,
