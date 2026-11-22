@@ -44,6 +44,8 @@ function catalogDocument(stored) {
   const {groups, selected, unassigned} = catalogFromStorage(stored);
   return {
     schemaVersion: 1,
+    lessonPlans: Object.entries(stored).filter(([key]) => key.startsWith("workflow:plan:"))
+      .map(([key, value]) => ({key, ...value})),
     unassignedStudents: [...unassigned.values()],
     groups: [...groups.values()].map((group) => ({
       key: group.key, origin: group.origin, period: group.period, name: group.name,
