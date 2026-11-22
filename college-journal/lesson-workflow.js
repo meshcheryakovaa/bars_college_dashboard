@@ -479,7 +479,7 @@
       "Вкладка с дашбордом останется активной. Очередь остановится при первой ошибке.";
     if (!window.confirm(prompt)) return;
     if (!grading) {
-      await runBatchDelayedClose(journal, plan, label);
+      await runBatchDelayedClose(journal, plan, label, priorPending);
       return;
     }
 
@@ -551,16 +551,19 @@
 
   batchBindButton.addEventListener("click", () => void runBatchBinding());
 
-  async function runBatchDelayedClose(journal, plan, label) {
+  async function runBatchDelayedClose(journal, plan, label, priorPending = null) {
     actionBusy = true;
     stopRequested = false;
+    const totalToVerify = plan.queue.length + (priorPending ? 1 : 0);
     batchStatus = {
-      completed: 0, total: plan.queue.length,
-      text: "Закрытие: отправлено 0 из " + plan.queue.length + ", проверено 0."
+      completed: 0, total: totalToVerify,
+      text: "Закрытие: новых запросов 0 из " + plan.queue.length +
+        ", подтверждено 0 из " + totalToVerify + "."
     };
     renderRows();
     try {
       const result = await collegeLessonBatch.runDelayedClose(plan.queue, {
+        initialPending: priorPending,
         stopped: () => stopRequested,
         async beforeSubmit(lesson, {submitted}) {
           const id = String(lesson.id);
@@ -594,16 +597,18 @@
         }),
         async progress({submitted, verified, previous}) {
           batchStatus.completed = verified;
-          batchStatus.text = "Закрытие: отправлено " + submitted + " из " +
-            plan.queue.length + ", подтверждено " + verified +
-            ". Занятие № " + previous.number + " ожидает следующего закрытия.";
+          batchStatus.text = "Закрытие: новых запросов " + submitted + " из " +
+            plan.queue.length + ", подтверждено " + verified + " из " +
+            totalToVerify + ". Занятие № " + previous.number +
+            " ожидает следующего закрытия.";
           renderRows();
           message(batchStatus.text);
         }
       });
       batchStatus.completed = result.verified;
-      const prefix = "Закрытие: отправлено " + result.submitted + " из " +
-        plan.queue.length + ", подтверждено " + result.verified + ". ";
+      const prefix = "Закрытие: новых запросов " + result.submitted + " из " +
+        plan.queue.length + ", подтверждено " + result.verified +
+        " из " + totalToVerify + ". ";
       const final = result.reason
         ? "Очередь остановлена: " + result.reason +
           " Непроверенные занятия не будут отправлены повторно автоматически."
@@ -642,16 +647,19 @@
       message(error.message, true);
       return;
     }
-    // Closing is a consequential, potentially irreversible operation. A partially
-    // ready journal must not be passed to the executor.
-    if (!grading && (plan.blocked.length || plan.attempted.length || plan.unresolved.length)) {
+    // Одно ранее отправленное закрытие может ожидать подтверждения
+    // ровно до следующей записи. Его нельзя отправлять повторно.
+    const priorPending = grading ? null : collegeLessonBatch.resumableClose(plan, plans);
+    const otherPending = plan.attempted.length + plan.unresolved.length - (priorPending ? 1 : 0);
+    // Closing is consequential: остальные непроверенные/неподготовленные занятия блокируют очередь.
+    if (!grading && (plan.blocked.length || otherPending)) {
       const preview = plan.blocked.slice(0, 5).map(({lesson, needsKtp, needsGrades}) =>
         "№ " + lesson.number + " / " + lesson.date + " (" +
         [needsKtp ? "КТП" : "", needsGrades ? "оценки" : ""].filter(Boolean).join(" и ") + ")").join(", ");
       message("Массовое закрытие не запущено. Не подтверждены предыдущие этапы: " +
         plan.blocked.length + (preview ? " — " + preview : "") +
         ". Закрытие уже отправлялось, требует проверки: " +
-        (plan.attempted.length + plan.unresolved.length) +
+        otherPending +
         ". Проверьте БАРС и подтвердите завершённые этапы по строкам.", true);
       return;
     }
@@ -670,7 +678,9 @@
       "Журнал: " + title(journal) + ".\n" +
       "Занятий всего: " + plan.total + ". Уже подтверждено: " + plan.completed.length +
       ". " + excluded + "Ранее отправлялось или требует проверки: " +
-      (plan.attempted.length + plan.unresolved.length) + ".\n\n" +
+      (plan.attempted.length + plan.unresolved.length) +
+      (priorPending ? ". Продолжим с проверкой уже отправленного занятия № " +
+        priorPending.number + " после нового закрытия (без повторной отправки)." : "") + ".\n\n" +
       "Действия выполняются по очереди без переключения вкладки. " +
       (grading ? "При ошибке или неподтверждённом результате выполнение остановится."
         : "После каждого следующего закрытия будет проверено предыдущее занятие. " +
