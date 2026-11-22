@@ -50,6 +50,7 @@
   let queueRunLabel = "";
   let queueLogs = [];
   let checkpoint = null;
+  let enrollmentSkips = {};
 
   const keyFor = (key) => {
     const journal = journals.find((item) => item.key === key);
@@ -588,19 +589,26 @@
 
   // Commands execute in the already open BARS tab without activating or focusing it.
   // Chrome host permission is limited to college.72to.ru (manifest.json).
-  function lessonPayload(journal, lesson, action) {
-    return {
+  async function lessonPayload(journal, lesson, action) {
+    const task = {
       action,
-      origin: journal.origin,
-      group: journal.group,
-      subject: journal.subject,
+      origin: journal.origin, period: journal.period,
+      group: journal.group, subject: journal.subject,
       practical: journal.kind === "practical",
       lessonId: String(lesson.id),
-      number: String(lesson.number),
-      date: String(lesson.date),
+      number: String(lesson.number), date: String(lesson.date),
       ktpNumber: String(stateFor(String(lesson.id)).ktpNumber || ""),
-      studentIds: journal.students.map(({id}) => String(id))
+      studentIds: journal.students.map(({id}) => String(id)),
+      students: journal.students.map(({id, name}) => ({id: String(id), name}))
     };
+    const model = globalThis.__barsEnrollmentSkip;
+    if (!model) throw new Error("Модуль проверки зачисления не загружен.");
+    const keys = journal.students.map(({id}) => model.storageKey(task, id));
+    const recorded = await chrome.storage.local.get(keys);
+    task.enrollmentSkips = Object.fromEntries(
+      journal.students.map(({id}) => [String(id), recorded[model.storageKey(task, id)]])
+        .filter(([, skip]) => skip));
+    return task;
   }
 
   async function executeLessonOperation(journal, lesson, action) {
@@ -608,12 +616,15 @@
       "Откройте дашборд из меню расширения на вкладке Электронного колледжа.");
     const target = {tabId: sourceTabId};
     // Only inject into the existing tab. Never activate that tab or focus its window.
+    await chrome.scripting.executeScript({target, files: ["enrollment-skip.js"]});
+    await chrome.scripting.executeScript({target, files: ["enrollment-skip-bridge.js"]});
+    await chrome.scripting.executeScript({target, world: "MAIN", files: ["enrollment-skip.js"]});
     await chrome.scripting.executeScript({target, world: "MAIN", files: ["lesson-actions-page.js"]});
     const output = await chrome.scripting.executeScript({
       target,
       world: "MAIN",
       func: (payload) => window.__barsLessonActions.run(payload),
-      args: [lessonPayload(journal, lesson, action)]
+      args: [await lessonPayload(journal, lesson, action)]
     });
     const result = output?.[0]?.result;
     if (!result || typeof result.ok !== "boolean") {
@@ -635,6 +646,13 @@
       if (result.verified) patch.linked = true;
     }
     if (action === "grades") {
+      patch.gradeReport = {
+        lessonDate: String(lesson.date), newGrades: Number(result.affected || 0),
+        existingGrades: Number(result.skippedExisting || 0),
+        skippedNonEnrolled: Number(result.skippedNonEnrolled || 0),
+        studentNames: result.skipNames || [],
+        at: new Date().toISOString(), verified: Boolean(result.verified)
+      };
       patch.gradeAttempted = true;
       patch.gradeNeedsReview = !result.verified;
       if (result.verified) {
