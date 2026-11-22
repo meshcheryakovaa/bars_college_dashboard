@@ -625,7 +625,7 @@
     };
     if (action === "bind") {
       patch.bindAttempted = true;
-      patch.bindNeedsReview = false;
+      patch.bindNeedsReview = !result.verified;
       if (result.verified) patch.linked = true;
     }
     if (action === "grades") {
@@ -1090,6 +1090,7 @@
     try {
       const summary = await collegeLessonBatch.runFillDates(plan.queue, {
         stopOnError,
+        requireKtpVerification: stopOnError,
         stopped: () => stopRequested,
         needed: (lesson, stage) => {
           const state = stateFor(String(lesson.id));
@@ -1449,7 +1450,8 @@
       actionBusy = false; stopRequested = false; renderRows();
       return;
     }
-    const invalid = readiness.filter((entry) => !entry.ready);
+    const invalid = readiness.filter((entry) => !entry.ready ||
+      stopOnError && entry.warnings.length > 0);
     queueStatus.textContent = "Проверено до записи: " + queue.length +
       " журналов. Готовы: " + (queue.length - invalid.length) +
       ". С проблемами: " + invalid.length + ".";
