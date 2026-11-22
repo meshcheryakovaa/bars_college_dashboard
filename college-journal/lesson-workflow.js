@@ -3,6 +3,15 @@
   "use strict";
   const prefix = "workflow:plan:";
   const journalSelect = document.querySelector("#workflow-journal");
+  const favoriteList = document.querySelector("#workflow-favorite-list");
+  const favoriteCount = document.querySelector("#workflow-favorite-count");
+  const queueRunButton = document.querySelector("#workflow-run-queue");
+  const queueClearButton = document.querySelector("#workflow-clear-queue");
+  const queueStatus = document.querySelector("#workflow-queue-status");
+  const queueResults = document.querySelector("#workflow-queue-results");
+  const stopErrorsInput = document.querySelector("#workflow-stop-errors");
+  const favoritesKey = "workflow:favorite-journals";
+  const stopErrorsKey = "workflow:stop-on-errors";
   const body = document.querySelector("#workflow-rows");
   const status = document.querySelector("#workflow-status");
   const summary = document.querySelector("#workflow-summary");
@@ -29,6 +38,11 @@
   let stopRequested = false;
   let batchStatus = null;
   let ktpAssignmentPromise = null;
+  let favoriteIds = [];
+  let preferencesLoaded = false;
+  let queueRunActive = false;
+  let queueRunLabel = "";
+  let queueLogs = [];
 
   const keyFor = (key) => {
     const journal = journals.find((item) => item.key === key);
@@ -37,6 +51,10 @@
     ]) : prefix + key;
   };
   const norm = (value) => String(value == null ? "" : value).replace(/\s+/g, " ").trim();
+  const journalIdentity = (journal) => JSON.stringify([
+    journal.origin, journal.period, journal.group, journal.subject,
+    journal.kind || "theoretical"
+  ]);
   const stateFor = (id) => plans[String(id)] || {};
   const storeState = (id, patch) => {
     plans[String(id)] = {...stateFor(id), ...patch};
@@ -121,11 +139,82 @@
     batchText.textContent = batchStatus.text;
   }
 
+  function renderFavorites() {
+    favoriteList.replaceChildren();
+    const available = new Map(journals.map((j) => [journalIdentity(j), j]));
+    favoriteCount.textContent = String(favoriteIds.length);
+    queueRunButton.disabled = actionBusy || !favoriteIds.length || sourceTabId === null;
+    queueClearButton.disabled = actionBusy || !favoriteIds.length;
+    for (const id of favoriteIds) {
+      const journal = available.get(id);
+      if (!journal) {
+        const missing = document.createElement("p");
+        missing.textContent = "Журнал отсутствует в локальной базе: " + id;
+        favoriteList.append(missing);
+        continue;
+      }
+    }
+    for (const journal of journals) {
+      const id = journalIdentity(journal);
+      const position = favoriteIds.indexOf(id);
+      const item = document.createElement("div");
+      item.className = "workflow-favorite" + (position >= 0 ? " is-selected" : "");
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = position >= 0;
+      input.disabled = actionBusy;
+      input.addEventListener("change", () => {
+        if (input.checked && !favoriteIds.includes(id)) favoriteIds.push(id);
+        if (!input.checked) favoriteIds = favoriteIds.filter((entry) => entry !== id);
+        void saveFavorites();
+      });
+      label.append(input, document.createTextNode(
+        (position < 0 ? "" : (position + 1) + ". ") + title(journal)));
+      item.append(label);
+      if (position >= 0) {
+        for (const [offset, caption] of [[-1, "↑"], [1, "↓"]]) {
+          const move = button(caption, () => {
+            const pos = favoriteIds.indexOf(id), next = pos + offset;
+            if (pos < 0 || next < 0 || next >= favoriteIds.length) return;
+            [favoriteIds[pos], favoriteIds[next]] = [favoriteIds[next], favoriteIds[pos]];
+            void saveFavorites();
+          }, actionBusy || position + offset < 0 || position + offset >= favoriteIds.length);
+          move.title = offset < 0 ? "Выше в очереди" : "Ниже в очереди";
+          item.append(move);
+        }
+      }
+      favoriteList.append(item);
+    }
+  }
+
+  async function saveFavorites() {
+    try {
+      favoriteIds = [...new Set(favoriteIds)];
+      await chrome.storage.local.set({[favoritesKey]: [...favoriteIds]});
+      renderFavorites();
+      queueStatus.textContent = "Избранные журналы сохранены. Очередь: " + favoriteIds.length + ".";
+    } catch (error) {
+      queueStatus.textContent = "Не удалось сохранить избранное: " + error.message;
+    }
+  }
+
+  function renderQueueResults() {
+    queueResults.replaceChildren();
+    for (const record of queueLogs) {
+      const item = document.createElement("li");
+      item.textContent = record;
+      queueResults.append(item);
+    }
+  }
+
   function renderRows() {
     renderBatchProgress();
+    renderFavorites();
     body.replaceChildren();
     const journal = current();
     journalSelect.disabled = actionBusy;
+    stopErrorsInput.disabled = actionBusy;
     stopAction.disabled = !actionBusy || sourceTabId === null;
     prepareAll.disabled = actionBusy || !journal;
     batchBindButton.disabled = actionBusy || !journal || sourceTabId === null;
@@ -284,6 +373,12 @@
   }
   async function refresh() {
     const records = await chrome.storage.local.get(null);
+    if (!preferencesLoaded) {
+      favoriteIds = Array.isArray(records[favoritesKey])
+        ? [...new Set(records[favoritesKey].filter((item) => typeof item === "string"))] : [];
+      stopErrorsInput.checked = records[stopErrorsKey] !== false;
+      preferencesLoaded = true;
+    }
     journals = Object.entries(records).filter(([key, value]) =>
       key.startsWith("journal:") && value && Array.isArray(value.lessons) && Array.isArray(value.students))
       .map(([key, journal]) => ({key, ...journal}))
@@ -296,11 +391,22 @@
     journalSelect.value = selectedKey;
     selection.hidden = !journals.length;
     await loadPlan();
+    renderFavorites();
   }
+  stopErrorsInput.addEventListener("change", () => {
+    void chrome.storage.local.set({[stopErrorsKey]: stopErrorsInput.checked})
+      .catch((error) => { queueStatus.textContent = "Не удалось сохранить настройку: " + error.message; });
+  });
+  queueClearButton.addEventListener("click", () => {
+    if (actionBusy || !window.confirm("Удалить список избранных журналов? Планы и данные БАРС не изменятся.")) return;
+    favoriteIds = [];
+    void saveFavorites();
+  });
   stopAction.addEventListener("click", () => {
     if (sourceTabId === null || !actionBusy) return;
     stopRequested = true;
     message("Остановка запрошена. Уже отправленные изменения в БАРС не отменяются.");
+    void chrome.tabs.sendMessage(sourceTabId, {type: "navigateJournalCancel"}).catch(() => {});
     void chrome.scripting.executeScript({target: {tabId: sourceTabId}, world: "MAIN",
       func: () => window.__barsLessonActions?.stop()}).catch((error) => message("Не удалось остановить: " + error.message, true));
   });
@@ -1023,7 +1129,7 @@
 
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local" || saving) return;
+    if (area !== "local" || saving || actionBusy) return;
     const keys = Object.keys(changes);
     if (keys.some((key) => key.startsWith("journal:") || key === keyFor(selectedKey) || key === "dashboard:cleared-at")) {
       void refresh().catch((error) => message(error.message, true));
