@@ -9,6 +9,12 @@
   const queueClearButton = document.querySelector("#workflow-clear-queue");
   const queueStatus = document.querySelector("#workflow-queue-status");
   const queueResults = document.querySelector("#workflow-queue-results");
+  const preflightButton = document.querySelector("#workflow-preflight");
+  const preflightResult = document.querySelector("#workflow-preflight-result");
+  const resumeQueueButton = document.querySelector("#workflow-resume-queue");
+  const reconcileButton = document.querySelector("#workflow-reconcile");
+  const recheckClosuresButton = document.querySelector("#workflow-recheck-closures");
+  const checkpointKey = "workflow:queue-checkpoint";
   const stopErrorsInput = document.querySelector("#workflow-stop-errors");
   const favoritesKey = "workflow:favorite-journals";
   const stopErrorsKey = "workflow:stop-on-errors";
@@ -43,6 +49,7 @@
   let queueRunActive = false;
   let queueRunLabel = "";
   let queueLogs = [];
+  let checkpoint = null;
 
   const keyFor = (key) => {
     const journal = journals.find((item) => item.key === key);
@@ -146,6 +153,9 @@
     favoriteCount.textContent = String(favoriteIds.length);
     queueRunButton.disabled = actionBusy || !favoriteIds.length || sourceTabId === null;
     queueClearButton.disabled = actionBusy || !favoriteIds.length;
+    preflightButton.disabled = actionBusy || !favoriteIds.length || sourceTabId === null;
+    resumeQueueButton.hidden = !(checkpoint && checkpoint.status !== "completed");
+    resumeQueueButton.disabled = actionBusy || !checkpoint || sourceTabId === null;
     for (const id of favoriteIds) {
       const journal = available.get(id);
       if (!journal) {
@@ -283,6 +293,8 @@
     batchGradesButton.disabled = actionBusy || !journal || sourceTabId === null;
     batchCloseButton.disabled = actionBusy || !journal || sourceTabId === null;
     fullDatesButton.disabled = actionBusy || !journal || sourceTabId === null;
+    reconcileButton.disabled = actionBusy || !journal || sourceTabId === null;
+    recheckClosuresButton.disabled = actionBusy || !journal || sourceTabId === null;
     ktpStart.disabled = actionBusy || !journal;
     if (!journal) {
       summary.textContent = "Выберите собранный журнал.";
@@ -439,6 +451,7 @@
       favoriteIds = Array.isArray(records[favoritesKey])
         ? [...new Set(records[favoritesKey].filter((item) => typeof item === "string"))] : [];
       stopErrorsInput.checked = records[stopErrorsKey] !== false;
+      checkpoint = records[checkpointKey] || null;
       preferencesLoaded = true;
     }
     journals = Object.entries(records).filter(([key, value]) =>
