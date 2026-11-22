@@ -45,6 +45,8 @@ function catalogDocument(stored) {
   return {
     schemaVersion: 1,
     queueCheckpoint: stored["workflow:queue-checkpoint"] || null,
+    enrollmentSkips: Object.entries(stored).filter(([key]) =>
+      key.startsWith("workflow:enrollment-skip:")).map(([key, skip]) => ({key, ...skip})),
     favoriteJournals: stored["workflow:favorite-journals"] || [],
     stopOnErrors: stored["workflow:stop-on-errors"] !== false,
     lessonPlans: Object.entries(stored).filter(([key]) => key.startsWith("workflow:plan:"))
