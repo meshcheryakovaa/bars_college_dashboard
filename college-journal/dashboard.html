@@ -10,6 +10,7 @@
   <script defer src="dashboard.js"></script>
   <script defer src="catalog-file.js"></script>
   <script defer src="lesson-batch.js"></script>
+  <script defer src="lesson-reconcile.js"></script>
   <script defer src="lesson-workflow.js"></script>
 </head>
 <body>
@@ -67,6 +68,8 @@
           <button type="button" id="workflow-grades-all" disabled>Всем «3» по всем занятиям</button>
           <button type="button" id="workflow-close-all" disabled>Закрыть все занятия</button>
           <button type="button" id="workflow-fill-dates" disabled>ЗАПОЛНИТЬ ЖУРНАЛ ПО ДАТАМ</button>
+          <button type="button" id="workflow-reconcile" disabled>Сверить с БАРС и продолжить</button>
+          <button type="button" id="workflow-recheck-closures" disabled>Проверить все неподтверждённые</button>
           <button type="button" id="workflow-prepare-all">Подготовить локальный план «3»</button>
           <button type="button" id="workflow-reset" disabled>Сбросить план</button>
           <button type="button" id="workflow-stop" disabled>Остановить действие</button>
@@ -83,10 +86,13 @@
           <div id="workflow-favorite-list" class="workflow-favorite-list"></div>
         </details>
         <div class="actions">
+          <button type="button" id="workflow-preflight" disabled>ПРОВЕРИТЬ ВСЮ ОЧЕРЕДЬ</button>
+          <button type="button" id="workflow-resume-queue" hidden disabled>Восстановить очередь после сверки</button>
           <button type="button" id="workflow-run-queue" disabled>ЗАПОЛНИТЬ ОЧЕРЕДЬ ЖУРНАЛОВ</button>
           <button type="button" id="workflow-clear-queue" disabled>Очистить избранное</button>
         </div>
         <p id="workflow-queue-status" class="muted" aria-live="polite" role="status"></p>
+        <div id="workflow-preflight-result" class="workflow-preflight-result" aria-live="polite"></div>
         <ol id="workflow-queue-results" class="workflow-queue-results" aria-label="Результаты очереди"></ol>
       </section>
       <p id="workflow-summary" class="muted"></p>
