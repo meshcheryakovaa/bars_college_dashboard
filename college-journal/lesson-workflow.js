@@ -7,6 +7,10 @@
   const status = document.querySelector("#workflow-status");
   const summary = document.querySelector("#workflow-summary");
   const numberAll = document.querySelector("#workflow-number-all");
+  const batchBindButton = document.querySelector("#workflow-bind-all");
+  const batchPanel = document.querySelector("#workflow-batch-status");
+  const batchText = document.querySelector("#workflow-batch-text");
+  const batchProgress = document.querySelector("#workflow-batch-progress");
   const resetPlan = document.querySelector("#workflow-reset");
   const stopAction = document.querySelector("#workflow-stop");
   const prepareAll = document.querySelector("#workflow-prepare-all");
@@ -18,6 +22,8 @@
   let plans = {};
   let saving = false;
   let actionBusy = false;
+  let stopRequested = false;
+  let batchStatus = null;
 
   const keyFor = (key) => {
     const journal = journals.find((item) => item.key === key);
@@ -82,7 +88,8 @@
       total: ids.length,
       linked: ids.filter((id) => stateFor(id).linked).length,
       graded: ids.filter((id) => stateFor(id).graded).length,
-      closed: ids.filter((id) => stateFor(id).closed).length
+      closed: ids.filter((id) => stateFor(id).closed).length,
+      attempted: ids.filter((id) => stateFor(id).bindAttempted && !stateFor(id).linked).length
     };
   }
   async function persist() {
@@ -90,19 +97,31 @@
     saving = true;
     try {
       await chrome.storage.local.set({[keyFor(selectedKey)]: {version: 1, entries: structuredClone(plans), updatedAt: Date.now()}});
-      message("План сохранён локально. Изменения ещё не отправлены в БАРС.");
+      if (!actionBusy) message("План сохранён локально.");
+      return true;
     } catch (error) {
       message("Не удалось сохранить план: " + error.message, true);
+      return false;
     } finally {
       saving = false;
     }
   }
+  function renderBatchProgress() {
+    batchPanel.hidden = !batchStatus;
+    if (!batchStatus) return;
+    batchProgress.max = Math.max(1, batchStatus.total);
+    batchProgress.value = batchStatus.completed;
+    batchText.textContent = batchStatus.text;
+  }
+
   function renderRows() {
+    renderBatchProgress();
     body.replaceChildren();
     const journal = current();
     journalSelect.disabled = actionBusy;
     stopAction.disabled = !actionBusy || sourceTabId === null;
     prepareAll.disabled = actionBusy || !journal;
+    batchBindButton.disabled = actionBusy || !journal || sourceTabId === null;
     if (!journal) {
       summary.textContent = "Выберите собранный журнал.";
       numberAll.disabled = resetPlan.disabled = true;
@@ -112,6 +131,7 @@
     const c = count(journal);
     summary.textContent = "Занятий: " + c.total + " · КТП подтверждено: " + c.linked
       + " · Оценки подтверждены: " + c.graded + " · Закрытие подтверждено: " + c.closed
+      + " · КТП отправлено, ожидает проверки: " + c.attempted
       + " · Студентов: " + journal.students.length;
 
     for (const lesson of lessonOrder(journal)) {
@@ -139,7 +159,8 @@
           return;
         }
         entry.setCustomValidity("");
-        await storeState(id, {ktpNumber: value, linked: false, closed: false});
+        await storeState(id, {ktpNumber: value, linked: false, closed: false,
+          bindAttempted: false, bindNeedsReview: false, lastAction: ""});
         renderRows();
       });
       makeCell(row, entry);
@@ -155,7 +176,8 @@
       checks.className = "workflow-checks";
       checks.append(
         checkbox("КТП привязано", Boolean(state.linked), (checked) => {
-          void storeState(id, {linked: checked, closed: false}).then(renderRows);
+          void storeState(id, {linked: checked, closed: false,
+            ...(checked ? {} : {bindAttempted: false, bindNeedsReview: false, lastAction: ""})}).then(renderRows);
         }, actionBusy || !state.ktpNumber),
         checkbox("Тройки внесены", Boolean(state.graded), (checked) => {
           void storeState(id, {graded: checked, closed: false}).then(renderRows);
@@ -217,6 +239,8 @@
   }
   stopAction.addEventListener("click", () => {
     if (sourceTabId === null || !actionBusy) return;
+    stopRequested = true;
+    message("Остановка запрошена. Уже отправленные изменения в БАРС не отменяются.");
     void chrome.scripting.executeScript({target: {tabId: sourceTabId}, world: "MAIN",
       func: () => window.__barsLessonActions?.stop()}).catch((error) => message("Не удалось остановить: " + error.message, true));
   });
@@ -260,170 +284,208 @@
     message("Тройки подготовлены для " + journal.lessons.length + " занятий. Внесите их в БАРС и подтвердите по каждому занятию.");
   });
 
-  async function runLessonAction(journal, lesson, action) {
-    if (actionBusy) return;
-    if (sourceTabId === null) {
-      message("Откройте дашборд с вкладки Электронного колледжа через меню расширения.", true);
-      return;
-    }
-    const currentState = stateFor(String(lesson.id));
-    if (action === "bind" && !validNumber(String(currentState.ktpNumber || "")) || action === "bind" && !currentState.ktpNumber) {
-      message("Укажите номер темы КТП для выбранного занятия.", true);
-      return;
-    }
-    if (action === "close" && (!currentState.linked || !currentState.graded)) {
-      message("Перед закрытием подтвердите привязку КТП и внесение троек.", true);
-      return;
-    }
-    const prompts = {
-      bind: "Привязать тему КТП № " + currentState.ktpNumber + " к занятию " + lesson.number
-        + " (" + lesson.date + ")? Будет вызвана штатная команда БАРС.",
-      grades: "Выставить оценку «3» студентам (" + journal.students.length + ") в занятии "
-        + lesson.number + "? Существующие непустые оценки не будут перезаписаны.",
-      close: "Закрыть занятие " + lesson.number + " (" + lesson.date + ") в БАРС? Это изменит состояние занятия на сервере."
+  // Commands execute in the already open BARS tab without activating or focusing it.
+  // Chrome host permission is limited to college.72to.ru (manifest.json).
+  function lessonPayload(journal, lesson, action) {
+    return {
+      action,
+      origin: journal.origin,
+      group: journal.group,
+      subject: journal.subject,
+      practical: journal.kind === "practical",
+      lessonId: String(lesson.id),
+      number: String(lesson.number),
+      date: String(lesson.date),
+      ktpNumber: String(stateFor(String(lesson.id)).ktpNumber || ""),
+      studentIds: journal.students.map(({id}) => String(id))
     };
-    if (prompts[action] && !window.confirm(prompts[action])) return;
-    actionBusy = true;
-    renderRows();
-    message("Выполняется «" + ({bind: "Привязать КТП", grades: "Всем 3", close: "Закрыть", check: "Сверить"}[action]) +
-      "» для занятия № " + lesson.number + ". Не переключайте группу или дисциплину в БАРС.");
-    try {
-      const tab = await chrome.tabs.update(sourceTabId, {active: true});
-      await chrome.windows.update(tab.windowId, {focused: true});
-      const target = {tabId: sourceTabId};
-      await chrome.scripting.executeScript({target, world: "MAIN", files: ["lesson-actions-page.js"]});
-      const payload = {
-        action,
-        origin: journal.origin,
-        group: journal.group,
-        subject: journal.subject,
-        practical: journal.kind === "practical",
-        lessonId: String(lesson.id),
-        number: String(lesson.number),
-        date: String(lesson.date),
-        ktpNumber: String(currentState.ktpNumber || ""),
-        studentIds: journal.students.map((student) => String(student.id))
-      };
-      const output = await chrome.scripting.executeScript({
-        target,
-        world: "MAIN",
-        func: (data) => window.__barsLessonActions.run(data),
-        args: [payload]
-      });
-      const result = output?.[0]?.result;
-      if (!result || typeof result.ok !== "boolean") throw new Error("БАРС не вернул состояние операции.");
-      if (result.ok && action !== "check") {
-        const patch = {
-          lastAction: ({bind: "КТП", grades: "Оценки", close: "Закрытие"}[action] || action)
-            + ": " + (result.verified ? "подтверждено" : "требует проверки"),
-          lastActionAt: new Date().toISOString()
-        };
-        if (result.verified && action === "bind") patch.linked = true;
-        if (result.verified && action === "grades") {
-          patch.gradesPrepared = true;
-          patch.graded = true;
-        }
-        if (result.verified && action === "close") patch.closed = true;
-        await storeState(String(lesson.id), patch);
-      }
-      message((result.ok ? "" : "Не выполнено: ") + result.message, !result.ok);
-    } catch (error) {
-      message("Ошибка обращения к БАРС: " + error.message, true);
-    } finally {
-      actionBusy = false;
-      renderRows();
-    }
   }
 
-  // Встраиваемая навигация ничего не записывает на сервер: только сверяет и подсвечивает колонку.
-  async function openLesson(journal, lesson, mode) {
+  async function executeLessonOperation(journal, lesson, action) {
+    if (sourceTabId === null) throw new Error(
+      "Откройте дашборд из меню расширения на вкладке Электронного колледжа.");
+    const target = {tabId: sourceTabId};
+    // Do not use chrome.tabs.update(active:true) or chrome.windows.update(focused:true).
+    await chrome.scripting.executeScript({target, world: "MAIN", files: ["lesson-actions-page.js"]});
+    const output = await chrome.scripting.executeScript({
+      target,
+      world: "MAIN",
+      func: (payload) => window.__barsLessonActions.run(payload),
+      args: [lessonPayload(journal, lesson, action)]
+    });
+    const result = output?.[0]?.result;
+    if (!result || typeof result.ok !== "boolean") {
+      throw new Error("БАРС не вернул состояние операции.");
+    }
+    return result;
+  }
+
+  async function saveActionOutcome(lesson, action, result) {
+    if (!result.ok || action === "check") return true;
+    const patch = {
+      lastAction: ({bind: "КТП", grades: "Оценки", close: "Закрытие"}[action] || action)
+        + ": " + (result.verified ? "подтверждено" : "требует проверки"),
+      lastActionAt: new Date().toISOString()
+    };
+    if (action === "bind") {
+      patch.bindAttempted = true;
+      patch.bindNeedsReview = false;
+      if (result.verified) patch.linked = true;
+    }
+    if (result.verified && action === "grades") {
+      patch.gradesPrepared = true;
+      patch.graded = true;
+    }
+    if (result.verified && action === "close") patch.closed = true;
+    return storeState(String(lesson.id), patch);
+  }
+
+  async function runLessonAction(journal, lesson, action) {
+    if (actionBusy) return;
     if (sourceTabId === null) {
       message("Откройте дашборд из меню расширения на вкладке Электронного колледжа.", true);
       return;
     }
-    const ktp = stateFor(String(lesson.id)).ktpNumber || "";
+    const state = stateFor(String(lesson.id));
+    if (action === "bind" && !/^[1-9]\d{0,3}$/.test(String(state.ktpNumber || ""))) {
+      message("Укажите корректный № темы КТП для выбранного занятия.", true);
+      return;
+    }
+    if (action === "close" && (!state.linked || !state.graded)) {
+      message("Перед закрытием подтвердите привязку КТП и внесение троек.", true);
+      return;
+    }
+    const prompts = {
+      bind: "Привязать тему КТП № " + state.ktpNumber + " к занятию " + lesson.number +
+        " (" + lesson.date + ")? Это действие изменяет данные в БАРС." +
+        (state.bindAttempted ? " ВНИМАНИЕ: запрос ранее уже отправлялся, проверьте возможную повторную привязку." : ""),
+      grades: "Выставить «3» студентам (" + journal.students.length + ") в занятии " +
+        lesson.number + "? Непустые оценки не будут перезаписаны.",
+      close: "Закрыть занятие " + lesson.number + " (" + lesson.date + ") в БАРС?"
+    };
+    if (prompts[action] && !window.confirm(prompts[action])) return;
+    actionBusy = true;
+    stopRequested = false;
+    renderRows();
+    message("Выполняется " + action + " для занятия № " + lesson.number +
+      " без переключения вкладок. Не изменяйте открытый журнал БАРС.");
     try {
-      const tab = await chrome.tabs.update(sourceTabId, {active: true});
-      await chrome.windows.update(tab.windowId, {focused: true});
-      const result = await chrome.scripting.executeScript({
-        target: {tabId: sourceTabId},
-        func: (expected, target, action, number) => {
-          if (location.origin !== expected.origin) return {ok: false, message: "Открыта другая образовательная система."};
-          const clean = (v) => String(v || "").replace(/\s+/g, " ").trim();
-          const visible = (node) => Boolean(node && node.getClientRects().length);
-          const compact = (v) => clean(v).replace(/\s[-–—]\s\d+\s+курс$/i, "");
-          const windows = [...document.querySelectorAll(".x-window")]
-            .filter((node) => visible(node) && /^Журнал (теоретических|практических) занятий/.test(
-              clean(node.querySelector(".x-window-header-text")?.textContent)))
-            .sort((a, b) => (Number(b.style.zIndex) || 0) - (Number(a.style.zIndex) || 0));
-          const journalWindow = windows.find((node) => {
-            const practical = clean(node.querySelector(".x-window-header-text")?.textContent).includes("практических");
-            if (practical !== expected.practical) return false;
-            const field = (label) => [...node.querySelectorAll(".x-form-item")].filter(visible).find((item) =>
-              [...item.querySelectorAll("label")].some((el) => clean(el.textContent).replace(/[:*]/g, "") === label))
-              ?.querySelector('input[type="text"]')?.value;
-            return compact(field("Группа")) === compact(expected.group) && clean(field("Предмет")) === clean(expected.subject);
-          });
-          if (!journalWindow) return {
-            ok: false, message: "Откройте нужный тип журнала, группу «" + expected.group + "» и предмет «"
-              + expected.subject + "» на вкладке «Журнал», затем повторите."
-          };
-          const tabActive = [...journalWindow.querySelectorAll(".x-tab-strip-active .x-tab-strip-text")]
-            .some((node) => clean(node.textContent) === "Журнал");
-          if (!tabActive) return {ok: false, message: "Переключитесь на вкладку «Журнал» и повторите."};
-          const grids = [...journalWindow.querySelectorAll(".x-grid3")].filter((node) =>
-            visible(node) && node.querySelector(".x-grid3-locked") && node.querySelector(".x-grid3-unlocked"));
-          if (grids.length !== 1) return {ok: false, message: "Не найдена одна готовая таблица журнала."};
-          const grid = grids[0], right = grid.querySelector(".x-grid3-unlocked");
-          const first = right.querySelector(".x-grid3-body > .x-grid3-row");
-          const columnKey = (node) => [...node.classList].find((name) => name.startsWith("x-grid3-td-"));
-          if (!first) return {ok: false, message: "Таблица пока не загрузилась."};
-          const byKey = new Map([...first.querySelectorAll("td.x-grid3-cell")].filter(
-            (node) => node.style.display === "none").map((node) => [columnKey(node), clean(node.textContent)]));
-          const headers = [...right.querySelectorAll(".x-grid3-header .x-grid3-gcell")];
-          const matching = headers.filter((header) => byKey.get(columnKey(header)) === String(target.id));
-          if (matching.length !== 1) return {
-            ok: false, message: "Не получилось однозначно найти ID занятия " + target.id
-              + " в открытом журнале. Обновите сбор данных."
-          };
-          const header = matching[0];
-          header.scrollIntoView({block: "center", inline: "center", behavior: "instant"});
-          header.style.outline = "3px solid #c27818";
-          header.style.outlineOffset = "-3px";
-          const id = "bars-workflow-guide";
-          document.getElementById(id)?.remove();
-          const notice = document.createElement("div");
-          notice.id = id;
-          notice.setAttribute("role", "status");
-          Object.assign(notice.style, {position: "fixed", zIndex: "2147483647", top: "16px", right: "16px",
-            maxWidth: "380px", padding: "14px 16px", background: "#fff", color: "#16343f",
-            border: "2px solid #c27818", borderRadius: "9px", font: "14px system-ui",
-            boxShadow: "0 8px 30px #0003"});
-          const caption = document.createElement("strong");
-          caption.textContent = "Занятие " + target.number + " · " + target.date;
-          const text = document.createElement("p");
-          text.textContent = action === "ktp" ? "Привяжите через штатное окно КТП тему № " + (number || "(не указан)")
-            : action === "grades" ? "Выставьте оценки «3» студентам через штатные ячейки БАРС."
-              : "Закройте занятие через штатную команду БАРС после сохранения оценок.";
-          const dismiss = document.createElement("button");
-          dismiss.type = "button";
-          dismiss.textContent = "Понятно";
-          dismiss.style.cssText = "padding:6px 10px;cursor:pointer";
-          dismiss.addEventListener("click", () => {notice.remove(); header.style.outline = "";});
-          notice.append(caption, text, dismiss);
-          document.body.append(notice);
-          return {ok: true, message: "Найден и подсвечен столбец занятия " + target.number + " (" + target.date + ")."};
-        },
-        args: [{
-          origin: journal.origin, group: journal.group, subject: journal.subject, practical: journal.kind === "practical"
-        }, {id: lesson.id, date: lesson.date, number: lesson.number}, mode, ktp]
-      });
-      const data = result?.[0]?.result;
-      message(data?.message || "Не удалось открыть выбранное занятие.", !data?.ok);
+      const result = await executeLessonOperation(journal, lesson, action);
+      const saved = await saveActionOutcome(lesson, action, result);
+      message((result.ok ? "" : "Не выполнено: ") + result.message +
+        (!saved ? " Изменение локального плана не сохранилось." : ""), !result.ok || !saved);
     } catch (error) {
-      message("Не удалось обратиться к вкладке БАРС: " + error.message, true);
+      message("Ошибка обращения к БАРС: " + error.message +
+        ". Проверьте, что вкладка колледжа открыта и расширению разрешён доступ к сайту.", true);
+    } finally {
+      actionBusy = false;
+      stopRequested = false;
+      renderRows();
     }
   }
+
+  async function runBatchBinding() {
+    if (actionBusy) return;
+    const journal = current();
+    if (!journal || sourceTabId === null) {
+      message("Выберите журнал и откройте дашборд из меню расширения на вкладке колледжа.", true);
+      return;
+    }
+    let plan;
+    try {
+      plan = collegeLessonBatch.prepare(journal, plans);
+    } catch (error) {
+      message(error.message, true);
+      return;
+    }
+    if (plan.missing.length) {
+      message("Пакетная привязка не запущена: у " + plan.missing.length +
+        " занятий не заполнен корректный № темы КТП (" +
+        plan.missing.slice(0, 5).map(({number, date}) => "№ " + number + " / " + date).join(", ") +
+        "). Заполните номера, затем повторите.", true);
+      return;
+    }
+    if (!plan.queue.length) {
+      message("Новых тем для пакетной привязки нет. Уже подтверждено: " + plan.linked.length +
+        ", запрос отправлен ранее: " + plan.attempted.length +
+        ", требуется разбор ошибки: " + plan.unresolved.length + ".", plan.unresolved.length > 0);
+      return;
+    }
+    const prompt = "Последовательно привязать темы КТП для " + plan.queue.length +
+      " занятий журнала «" + title(journal) + "»?\n\n" +
+      "Уже подтверждено: " + plan.linked.length +
+      ". Ранее отправлено, ожидает проверки: " + plan.attempted.length +
+      ". Неясный результат предыдущих операций: " + plan.unresolved.length + ".\n\n" +
+      "Вкладка с дашбордом останется активной. Очередь остановится при первой ошибке.";
+    if (!window.confirm(prompt)) return;
+
+    actionBusy = true;
+    stopRequested = false;
+    let completed = 0;
+    let reason = "";
+    batchStatus = {completed: 0, total: plan.queue.length,
+      text: "Пакетная привязка КТП: 0 из " + plan.queue.length + "."};
+    renderRows();
+    try {
+      for (const lesson of plan.queue) {
+        if (stopRequested) {
+          reason = "Операция остановлена пользователем.";
+          break;
+        }
+        const id = String(lesson.id);
+        batchStatus.text = "Привязка КТП " + (completed + 1) + " из " + plan.queue.length +
+          ": занятие № " + lesson.number + ", " + lesson.date +
+          ", тема № " + stateFor(id).ktpNumber + ".";
+        renderBatchProgress();
+        let result;
+        try {
+          result = await executeLessonOperation(journal, lesson, "bind");
+        } catch (error) {
+          result = {ok: false, message: error.message};
+        }
+        if (!result.ok) {
+          // Once a command has been attempted the server state could be uncertain.
+          // Do not automatically retry that lesson in a later batch.
+          const saved = await storeState(id, {
+            bindNeedsReview: true,
+            lastAction: "КТП: проверить после ошибки",
+            lastActionAt: new Date().toISOString()
+          });
+          reason = "Остановлено на занятии № " + lesson.number + " (" + lesson.date +
+            "): " + result.message +
+            (saved ? " Проверьте эту дату в БАРС перед повторной отправкой." :
+              " Локальный результат не удалось сохранить.");
+          break;
+        }
+        const saved = await saveActionOutcome(lesson, "bind", result);
+        if (!saved) {
+          reason = "БАРС обработал занятие № " + lesson.number +
+            ", но не удалось сохранить локальный результат; очередь остановлена.";
+          break;
+        }
+        completed++;
+        batchStatus.completed = completed;
+        batchStatus.text = "Пакетная привязка КТП: " + completed + " из " +
+          plan.queue.length + ". Последнее занятие — № " + lesson.number +
+          " (" + lesson.date + ")." + (result.verified ? "" : " Требуется проверка результата в БАРС.");
+        renderRows();
+        message(batchStatus.text);
+      }
+    } catch (error) {
+      reason = "Пакетная операция прервана: " + error.message;
+    } finally {
+      actionBusy = false;
+      stopRequested = false;
+      const complete = completed === plan.queue.length && !reason;
+      batchStatus.text = (complete ? "Очередь завершена. " : "Очередь остановлена. ") +
+        "Обработано " + completed + " из " + plan.queue.length + "." +
+        (reason ? " " + reason : " Проверьте записи КТП в БАРС; неподтверждённые привязки отмечены отдельно.");
+      renderRows();
+      message(batchStatus.text, !complete);
+    }
+  }
+
+  batchBindButton.addEventListener("click", () => void runBatchBinding());
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local" || saving) return;
