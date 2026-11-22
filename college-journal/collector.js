@@ -138,6 +138,8 @@
   let candidate;
   let stableSince = 0;
   let sending = false;
+  let navigating = false;
+  let navigationController;
   let readingGroups = false;
   let catalogMessage = "";
   let manualStarted;
@@ -514,7 +516,90 @@
     auto.message = "Автосбор завершён.";
   }
 
+  // Повторно используем проверенный механизм открытия групп и предметов,
+  // вместо попытки выбирать записи Ext JS непосредственно из дашборда.
+  async function navigateJournal(target, signal) {
+    if (!target || target.origin !== location.origin || target.period !== readPeriod()
+      || !target.group || !target.subject) {
+      throw new Error("Сайт, учебный период, группа или предмет не соответствуют журналу очереди.");
+    }
+    const practical = target.kind === "practical";
+    await openJournal(practical, signal);
+    await openBatchGroup({period: target.period, name: target.group}, signal, practical);
+    signal.throwIfAborted();
+    const scope = await waitStable(() => {
+      const active = findScope(practical);
+      if (!active?.field || groupName(active.group) !== groupName(target.group)) return null;
+      const status = pageCommand(active, "state");
+      return !status.busy && !status.pickerBusy ? {key: active.field.id, value: active} : null;
+    }, signal, "Не удалось выбрать группу «" + target.group + "».");
+
+    const already = readPage(scope);
+    const matching = (journal) => journal && clean(journal.subject) === clean(target.subject)
+      && groupName(journal.group) === groupName(target.group)
+      && journal.period === target.period;
+    if (!matching(already)) {
+      pageCommand(scope, "open");
+      const options = await waitStable(() => {
+        const active = findScope(practical);
+        if (!active?.field || groupName(active.group) !== groupName(target.group)) return null;
+        const state = pageCommand(active, "list");
+        if (state.busy || !state.expanded || !state.items.length
+          || state.total > state.items.length
+          || state.rendered !== null && state.rendered !== state.items.length) return null;
+        return {key: JSON.stringify(state.items), value: state.items};
+      }, signal, "Не удалось загрузить список дисциплин.");
+      const matches = options.filter(({label}) => clean(label) === clean(target.subject));
+      if (matches.length !== 1) {
+        throw new Error("В списке дисциплин не найден единственный предмет «" + target.subject + "».");
+      }
+      const current = findScope(practical);
+      if (!current?.field || groupName(current.group) !== groupName(target.group))
+        throw new Error("Группа изменилась во время выбора дисциплины.");
+      pageCommand(current, "select", matches[0]);
+    }
+    const selected = await waitStable(() => {
+      const active = findScope(practical);
+      if (!active || masked(active)) return null;
+      const state = pageCommand(active, "state");
+      if (state.busy || state.pickerBusy) return null;
+      const journal = readPage(active);
+      return matching(journal) ? {key: JSON.stringify(journal), value: journal} : null;
+    }, signal, "Не загрузился выбранный предмет «" + target.subject + "».");
+    const ids = new Set(selected.lessons.map((lesson) => String(lesson.id)));
+    const missing = (target.lessonIds || []).filter((id) => !ids.has(String(id)));
+    if (missing.length) {
+      throw new Error("В открытой таблице отсутствует " + missing.length +
+        " занятий из сохранённого журнала. Проверьте диапазон дат БАРС и повторите сбор.");
+    }
+    return {
+      group: selected.group, subject: selected.subject, kind: selected.kind || "theoretical",
+      lessonCount: selected.lessons.length
+    };
+  }
+
   function handleMessage(message, sender, reply) {
+    if (message.type === "navigateJournalCancel") {
+      navigationController?.abort();
+      reply({ok: true});
+      return;
+    }
+    if (message.type === "navigateJournal") {
+      if (navigating || auto.running || readingGroups) {
+        reply({ok: false, error: "На вкладке БАРС уже выполняется навигация или сбор данных."});
+        return;
+      }
+      navigating = true;
+      navigationController = new AbortController();
+      navigateJournal(message.journal, navigationController.signal)
+        .then((result) => reply({ok: true, journal: result}),
+          (error) => reply({ok: false, error: error.message}))
+        .finally(() => {
+          navigating = false;
+          navigationController = undefined;
+        });
+      return true;
+    }
     if (message.type !== "collectorStatus") return;
     if (message.manual !== undefined && !auto.running) {
       manual = message.manual;
@@ -564,6 +649,7 @@
     candidate = lastSent = undefined;
     controller?.abort();
     catalogController?.abort();
+    navigationController?.abort();
   });
   globalThis.collegeJournalCollector = true;
   chrome.runtime.onMessage.addListener(handleMessage);
