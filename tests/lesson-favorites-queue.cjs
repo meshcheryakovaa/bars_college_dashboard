@@ -94,7 +94,7 @@ function hooks(trace, opts = {}) {
   assert(background.includes('key === "workflow:favorite-journals"'));
   assert(background.includes('key === "workflow:stop-on-errors"'));
   assert(!/chrome\.tabs\.update\s*\(|chrome\.windows\.update\s*\(/.test(workflow));
-  assert.equal(manifest.version, "1.12.0");
+  assert.equal(manifest.version, "1.13.0");
 
   console.log("PASS: strict/tolerant modes, safe stage skipping, favorites and navigation");
 })().catch((error) => {console.error(error); process.exitCode = 1;});
