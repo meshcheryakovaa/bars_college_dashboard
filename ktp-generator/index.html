@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>КТП по группам · БАРС</title>
+<link rel="stylesheet" href="style.css">
+<main>
+<header><div class="brand"><span>Б</span> БАРС / Учебное планирование</div>
+<h1>КТП по группам</h1><p>Заполните реквизиты группы один раз. В архив войдут два файла Excel для каждой группы — осенний и весенний.</p></header>
+<form id="editor">
+<section><div class="bar"><h2>Сводная таблица</h2><button id="add" type="button">+ Добавить группу</button></div>
+<p class="hint">Каждый столбец — одна группа. Новая группа наследует общие реквизиты предыдущей.</p>
+<div class="scroll"><table><thead><tr id="heads"><th scope="col">Реквизит</th></tr></thead><tbody id="fields"></tbody></table></div>
+</section>
+<footer><output id="status" aria-live="polite"></output><button id="download">Скачать все файлы ZIP ↓</button></footer>
+</form></main>
+<script src="vendor/jszip.min.js"></script><script src="templates.js"></script><script src="workbook.js"></script><script src="app.js"></script>
+</html>
