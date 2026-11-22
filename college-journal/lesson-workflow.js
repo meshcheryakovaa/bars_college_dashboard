@@ -817,6 +817,186 @@
     }
   }
 
+  async function runFullJournalByDates() {
+    if (actionBusy) return;
+    const journal = current();
+    if (!journal || sourceTabId === null) {
+      message("Выберите журнал и откройте дашборд из вкладки БАРС.", true);
+      return;
+    }
+    // Пользователю достаточно указать единственный начальный номер:
+    // если он указан, перед запуском выстраиваем всю последовательность.
+    if (ktpStart.value.trim()) {
+      const assignment = await applySequentialKtp();
+      if (!assignment) return;
+    }
+    let plan;
+    try {
+      plan = collegeLessonBatch.prepareFull(journal, plans);
+    } catch (error) {
+      message(error.message, true);
+      return;
+    }
+    if (plan.problems.length) {
+      message("Автозаполнение остановлено до начала: " + plan.problems.length +
+        " занятий требуют подготовки или проверки. " +
+        plan.problems.slice(0, 5).map(({lesson, reason}) =>
+          "№ " + lesson.number + " (" + lesson.date + "): " + reason).join("; ") +
+        ". Проверьте эти занятия в БАРС, чтобы не отправить повторные изменения.", true);
+      return;
+    }
+    if (!plan.queue.length) {
+      message("Все занятия выбранного журнала уже отмечены закрытыми. Новых дат для обработки нет.");
+      return;
+    }
+    const prompt = "ЗАПОЛНИТЬ ЖУРНАЛ ПО ДАТАМ?\n\n" +
+      title(journal) + "\nЗанятий для обработки: " + plan.queue.length +
+      " из " + plan.total + ".\n\nДля каждой даты: привязать КТП, " +
+      "поставить «3» в пустые ячейки, закрыть, нажать «Обновить», проверить. " +
+      "При задержке статуса закрытия проверка будет завершена после следующей даты.\n" +
+      "Существующие оценки не перезаписываются. Вкладка БАРС останется фоновой.\n" +
+      "Любая ошибка записи или сохранения состояния остановит дальнейшие даты.";
+    if (!window.confirm(prompt)) return;
+
+    actionBusy = true;
+    stopRequested = false;
+    batchStatus = {
+      total: plan.queue.length, completed: 0,
+      text: "Заполнение журнала по датам: 0 из " + plan.queue.length + "."
+    };
+    renderRows();
+    const label = (stage) => ({
+      bind: "привязка КТП", grades: "всем «3»", close: "закрытие",
+      refresh: "обновление и проверка", done: "занятие обработано"
+    })[stage] || stage;
+    const failState = async (lesson, stage, result) => {
+      const id = String(lesson.id), prefix = stage === "bind" ? "КТП" :
+        stage === "grades" ? "Оценки" : "Закрытие";
+      const patch = {
+        lastAction: prefix + ": результат неизвестен, проверьте в БАРС",
+        lastActionAt: new Date().toISOString()
+      };
+      if (stage === "bind") Object.assign(patch,
+        {bindAttempted: true, bindNeedsReview: true});
+      if (stage === "grades") Object.assign(patch,
+        {gradeAttempted: true, gradeNeedsReview: true});
+      if (stage === "close") Object.assign(patch,
+        {closeAttempted: true, closeNeedsReview: true});
+      await storeState(id, patch);
+    };
+    try {
+      const summary = await collegeLessonBatch.runFillDates(plan.queue, {
+        stopped: () => stopRequested,
+        needed: (lesson, stage) => {
+          const state = stateFor(String(lesson.id));
+          return stage === "bind" ? !state.linked
+            : stage === "grades" ? !state.graded
+              : !state.closed;
+        },
+        async perform(lesson, stage) {
+          const id = String(lesson.id);
+          const intent = stage === "bind"
+            ? {bindAttempted: true, bindNeedsReview: true, lastAction: "КТП: отправляется"}
+            : stage === "grades"
+              ? {gradeAttempted: true, gradeNeedsReview: true, lastAction: "Оценки: выставляются"}
+              : {closeAttempted: true, closeNeedsReview: true, lastAction: "Закрытие: отправляется"};
+          if (!await storeState(id, {...intent, lastActionAt: new Date().toISOString()})) {
+            return {ok: false, message: "Не удалось записать контрольную отметку до изменения БАРС."};
+          }
+          let result;
+          try {
+            result = await executeLessonOperation(journal, lesson,
+              stage === "close" ? "closeBatch" : stage);
+          } catch (error) {
+            result = {ok: false, verified: false, message: error.message};
+          }
+          if (!result.ok) {
+            await failState(lesson, stage, result);
+            return result;
+          }
+          let saved;
+          if (stage === "bind") {
+            // В текущей инспекции нет достоверного read-back КТП:
+            // запрос принят, но галочка "привязано" остаётся ручной.
+            saved = await storeState(id, {
+              bindAttempted: true, bindNeedsReview: !result.verified,
+              ...(result.verified ? {linked: true} : {}),
+              lastAction: result.verified
+                ? "КТП: подтверждено"
+                : "КТП: отправлено; сверить после выполнения",
+              lastActionAt: new Date().toISOString()
+            });
+          } else if (stage === "grades") {
+            saved = await saveActionOutcome(lesson, "grades", result);
+          } else {
+            saved = await storeState(id, {
+              closeAttempted: true, closeNeedsReview: true,
+              lastAction: "Закрытие: отправлено; ждём обновления",
+              lastActionAt: new Date().toISOString()
+            });
+          }
+          return saved ? result : {ok: false, message: "БАРС выполнил действие, но локальная отметка не сохранилась."};
+        },
+        async verify(lesson, final) {
+          const id = String(lesson.id);
+          let result;
+          try {
+            result = await executeLessonOperation(journal, lesson,
+              final ? "verifyCloseFinal" : "verifyClose");
+          } catch (error) {
+            result = {ok: false, verified: false, message: error.message};
+          }
+          if (result.ok && result.verified) {
+            const saved = await saveActionOutcome(lesson, "close", result);
+            if (!saved) return {ok: false, verified: false,
+              message: "Закрытие подтверждено, но не удалось сохранить отметку."};
+          } else {
+            const saved = await storeState(id, {
+              closeAttempted: true, closeNeedsReview: true,
+              lastAction: "Закрытие: статус запаздывает; требуется проверка",
+              lastActionAt: new Date().toISOString()
+            });
+            if (!saved) return {ok: false, verified: false,
+              message: "Не удалось сохранить состояние ожидания закрытия."};
+          }
+          return result;
+        },
+        async progress({lesson, stage, processed, verifiedClose, pending}) {
+          batchStatus.completed = processed;
+          batchStatus.text = "Заполнение по датам: " + processed + " из " +
+            plan.queue.length + ". Текущее занятие № " + lesson.number +
+            " (" + lesson.date + "), этап: " + label(stage) +
+            ". Закрытий подтверждено: " + verifiedClose +
+            (pending ? ". Занятие № " + pending.number + " ожидает подтверждения." : ".");
+          renderBatchProgress();
+          if (stage === "done") renderRows();
+          message(batchStatus.text);
+        }
+      });
+      const done = summary.processed === plan.queue.length && !summary.reason;
+      batchStatus.completed = summary.processed;
+      batchStatus.text = (summary.reason ? "ОСТАНОВЛЕНО. " :
+        done ? "ДАТЫ ОБРАБОТАНЫ. " : "НЕ ЗАВЕРШЕНО. ") +
+        "Занятий: " + summary.processed + " из " + plan.queue.length +
+        ". Подтверждено закрытий: " + summary.verifiedClose + ". " +
+        (summary.reason || (summary.pending
+          ? "Последнее занятие № " + summary.pending.number + " (" +
+            summary.pending.date + ") ожидает подтверждения. Используйте «Проверить закрытие» без повторной отправки."
+          : "Проверьте привязанные темы КТП в БАРС: факт отправки запроса не является подтверждением привязки."));
+      message(batchStatus.text, Boolean(summary.reason));
+    } catch (error) {
+      batchStatus.text = "Автозаполнение остановлено: " + error.message +
+        ". Проверьте уже выполненные даты, не повторяйте отправленные закрытия.";
+      message(batchStatus.text, true);
+    } finally {
+      actionBusy = false;
+      stopRequested = false;
+      renderRows();
+    }
+  }
+
+  fullDatesButton.addEventListener("click", () => void runFullJournalByDates());
+
   batchGradesButton.addEventListener("click", () => void runBatchWrite("grades"));
   batchCloseButton.addEventListener("click", () => void runBatchWrite("close"));
 
