@@ -51,6 +51,7 @@
   let queueLogs = [];
   let checkpoint = null;
   let enrollmentSkips = {};
+  const enrollmentPrefix = "workflow:enrollment-skip:";
 
   const keyFor = (key) => {
     const journal = journals.find((item) => item.key === key);
@@ -139,6 +140,67 @@
       saving = false;
     }
   }
+  async function loadEnrollmentSkips(journal) {
+    const selected = journal ? journalIdentity(journal) : null;
+    if (!selected) { enrollmentSkips = {}; return; }
+    const expected = JSON.parse(selected);
+    const saved = await chrome.storage.local.get(null);
+    const next = {};
+    const model = globalThis.__barsEnrollmentSkip;
+    for (const [key, skip] of Object.entries(saved)) {
+      if (!key.startsWith(enrollmentPrefix)) continue;
+      let pieces;
+      try { pieces = JSON.parse(key.slice(enrollmentPrefix.length)); }
+      catch { continue; }
+      if (!Array.isArray(pieces) || pieces.length !== 7 ||
+        expected.some((v, i) => v !== pieces[i])) continue;
+      const lessonId = String(pieces[5]), studentId = String(pieces[6]);
+      const lesson = journal.lessons.find((row) => String(row.id) === lessonId);
+      const student = journal.students.find((row) => String(row.id) === studentId);
+      if (!lesson || !student || !model) continue;
+      const task = {origin: journal.origin, period: journal.period,
+        group: journal.group, subject: journal.subject,
+        practical: journal.kind === "practical",
+        lessonId, date: String(lesson.date)};
+      if (!model.validSkip(skip, task, studentId) ||
+        !model.same(skip.studentName, student.name)) continue;
+      (next[lessonId] ||= {})[studentId] = skip;
+    }
+    if (current() && journalIdentity(current()) === selected) enrollmentSkips = next;
+  }
+
+  async function clearEnrollmentSkip(journal, lesson, studentId) {
+    if (actionBusy) return;
+    const skip = enrollmentSkips[String(lesson.id)]?.[String(studentId)];
+    if (!skip) return;
+    if (stateFor(String(lesson.id)).closed) {
+      message("Сначала откройте закрытое занятие в БАРС, затем повторите проверку зачисления.", true);
+      return;
+    }
+    if (!window.confirm("Удалить подтверждённый пропуск студента «" +
+      skip.studentName + "» только для занятия № " + lesson.number + " (" +
+      lesson.date + ")? Следующая попытка выставления «3» заново проверит зачисление.")) return;
+    const model = globalThis.__barsEnrollmentSkip;
+    const task = {origin: journal.origin, period: journal.period,
+      group: journal.group, subject: journal.subject,
+      practical: journal.kind === "practical", lessonId: String(lesson.id)};
+    try {
+      await chrome.storage.local.remove(model.storageKey(task, studentId));
+      await loadEnrollmentSkips(journal);
+      const stored = await storeState(String(lesson.id), {
+        graded: false, gradeAttempted: false, gradeNeedsReview: false,
+        lastAction: "Зачисление: повторная проверка разрешена",
+        lastActionAt: new Date().toISOString()
+      });
+      renderRows();
+      message(stored ? "Пропуск студента " + skip.studentName +
+        " снят для занятия № " + lesson.number + ". Можно снова нажать «Всем 3»." :
+        "Пропуск снят, но локальный план не сохранился.", !stored);
+    } catch (error) {
+      message("Не удалось снять пропуск: " + error.message, true);
+    }
+  }
+
   function renderBatchProgress() {
     batchPanel.hidden = !batchStatus;
     if (!batchStatus) return;
@@ -304,12 +366,14 @@
     }
     numberAll.disabled = resetPlan.disabled = actionBusy;
     const c = count(journal);
+    const enrollmentSkipCount = Object.values(enrollmentSkips).reduce((sum, entries) => sum + Object.keys(entries).length, 0);
     summary.textContent = "Занятий: " + c.total + " · КТП подтверждено: " + c.linked
       + " · Оценки подтверждены: " + c.graded + " · Закрытие подтверждено: " + c.closed
       + " · КТП отправлено, ожидает проверки: " + c.attempted
       + " · Оценки требуют проверки: " + c.gradePending
       + " · Закрытие требует проверки: " + c.closePending
-      + " · Студентов: " + journal.students.length;
+      + " · Студентов: " + journal.students.length
+      + " · Подтверждённых пропусков по датам: " + enrollmentSkipCount;
 
     for (const lesson of lessonOrder(journal)) {
       const id = String(lesson.id);
@@ -348,6 +412,26 @@
         (checked) => { void storeState(id, {gradesPrepared: checked, graded: false, closed: false}).then(renderRows); });
       prepared.querySelector("input").disabled = actionBusy;
       grade.append(prepared);
+      if (state.gradeReport) {
+        const report = document.createElement("small");
+        report.className = "workflow-grade-report";
+        report.textContent = "Выставлено " + state.gradeReport.newGrades +
+          " · существующих " + state.gradeReport.existingGrades +
+          " · не числились " + state.gradeReport.skippedNonEnrolled;
+        grade.append(report);
+      }
+      for (const [studentId, skipped] of Object.entries(enrollmentSkips[id] || {})) {
+        const detail = document.createElement("div");
+        detail.className = "workflow-enrollment-skip";
+        const caption = document.createElement("small");
+        caption.textContent = skipped.studentName + " — не числился на " +
+          skipped.lessonDate + " (проверено " +
+          new Date(skipped.checkedAt).toLocaleString("ru-RU") + ")";
+        detail.append(caption, button("Перепроверить", () =>
+          void clearEnrollmentSkip(journal, lesson, studentId),
+          actionBusy || Boolean(state.closed)));
+        grade.append(detail);
+      }
       makeCell(row, grade);
       const checks = document.createElement("div");
       checks.className = "workflow-checks";
@@ -437,6 +521,7 @@
       if (current()?.key !== journal.key) return;
       plans = (saved[keyFor(selectedKey)] || saved[prefix + selectedKey])?.entries || {};
     }
+    await loadEnrollmentSkips(journal);
     if (journal) {
       try {
         const first = collegeLessonBatch.lessonsByDate(journal)[0];
@@ -646,6 +731,7 @@
       if (result.verified) patch.linked = true;
     }
     if (action === "grades") {
+      if (current()) await loadEnrollmentSkips(current());
       patch.gradeReport = {
         lessonDate: String(lesson.date), newGrades: Number(result.affected || 0),
         existingGrades: Number(result.skippedExisting || 0),
