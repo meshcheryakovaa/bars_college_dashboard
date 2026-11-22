@@ -610,7 +610,9 @@
     }
   }
 
-  batchBindButton.addEventListener("click", () => void runBatchBinding());
+  batchBindButton.addEventListener("click", () => {
+    void runBatchBinding().catch((error) => message("Ошибка пакетной привязки КТП: " + error.message, true));
+  });
 
   async function runBatchDelayedClose(journal, plan, label, priorPending = null) {
     actionBusy = true;
@@ -1007,10 +1009,16 @@
     }
   }
 
-  fullDatesButton.addEventListener("click", () => void runFullJournalByDates());
+  fullDatesButton.addEventListener("click", () => {
+    void runFullJournalByDates().catch((error) => message("Ошибка заполнения журнала по датам: " + error.message, true));
+  });
 
-  batchGradesButton.addEventListener("click", () => void runBatchWrite("grades"));
-  batchCloseButton.addEventListener("click", () => void runBatchWrite("close"));
+  batchGradesButton.addEventListener("click", () => {
+    void runBatchWrite("grades").catch((error) => message("Ошибка массового выставления оценок: " + error.message, true));
+  });
+  batchCloseButton.addEventListener("click", () => {
+    void runBatchWrite("close").catch((error) => message("Ошибка массового закрытия: " + error.message, true));
+  });
 
 
 
