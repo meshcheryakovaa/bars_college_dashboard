@@ -543,6 +543,138 @@
 
   batchBindButton.addEventListener("click", () => void runBatchBinding());
 
+  async function runBatchWrite(action) {
+    if (actionBusy) return;
+    const journal = current();
+    if (!journal || sourceTabId === null) {
+      message("Выберите журнал и откройте дашборд из вкладки колледжа.", true);
+      return;
+    }
+    const grading = action === "grades";
+    const label = grading ? "Выставить всем «3» по всем занятиям" : "Закрыть все занятия";
+    let plan;
+    try {
+      plan = grading ? collegeLessonBatch.prepareGrades(journal, plans)
+        : collegeLessonBatch.prepareClose(journal, plans);
+    } catch (error) {
+      message(error.message, true);
+      return;
+    }
+    // Closing is a consequential, potentially irreversible operation. A partially
+    // ready journal must not be passed to the executor.
+    if (!grading && (plan.blocked.length || plan.attempted.length || plan.unresolved.length)) {
+      const preview = plan.blocked.slice(0, 5).map(({lesson, needsKtp, needsGrades}) =>
+        "№ " + lesson.number + " / " + lesson.date + " (" +
+        [needsKtp ? "КТП" : "", needsGrades ? "оценки" : ""].filter(Boolean).join(" и ") + ")").join(", ");
+      message("Массовое закрытие не запущено. Не подтверждены предыдущие этапы: " +
+        plan.blocked.length + (preview ? " — " + preview : "") +
+        ". Закрытие уже отправлялось, требует проверки: " +
+        (plan.attempted.length + plan.unresolved.length) +
+        ". Проверьте БАРС и подтвердите завершённые этапы по строкам.", true);
+      return;
+    }
+    if (!plan.queue.length) {
+      message("Новых занятий для операции «" + label + "» нет. Подтверждено ранее: " +
+        plan.completed.length + ", требует проверки: " +
+        (plan.attempted.length + plan.unresolved.length) + ".", false);
+      return;
+    }
+    const excluded = grading ? "Уже закрыто: " + plan.closed.length + ". " : "";
+    const prompt = (grading
+      ? "Выставить оценку «3» всем студентам в " + plan.queue.length +
+        " занятиях выбранного журнала? Уже заполненные оценки не изменятся.\n\n"
+      : "Закрыть " + plan.queue.length +
+        " занятий выбранного журнала? Это изменяет статус занятий на сервере БАРС.\n\n") +
+      "Журнал: " + title(journal) + ".\n" +
+      "Занятий всего: " + plan.total + ". Уже подтверждено: " + plan.completed.length +
+      ". " + excluded + "Ранее отправлялось или требует проверки: " +
+      (plan.attempted.length + plan.unresolved.length) + ".\n\n" +
+      "Действия выполняются по очереди без переключения вкладки. " +
+      "При ошибке или неподтверждённом результате выполнение остановится.";
+    if (!window.confirm(prompt)) return;
+
+    actionBusy = true;
+    stopRequested = false;
+    let completed = 0;
+    let reason = "";
+    batchStatus = {completed: 0, total: plan.queue.length,
+      text: label + ": 0 из " + plan.queue.length + "."};
+    renderRows();
+    try {
+      for (const lesson of plan.queue) {
+        if (stopRequested) {
+          reason = "Остановка запрошена пользователем.";
+          break;
+        }
+        const id = String(lesson.id);
+        const position = completed + 1;
+        batchStatus.text = label + ": " + position + " из " + plan.queue.length +
+          ". Занятие № " + lesson.number + " (" + lesson.date + ").";
+        renderBatchProgress();
+        // Record intent before the first server mutation. On interruptions a
+        // later run will not repeat an uncertain write automatically.
+        const intent = await storeState(id, grading
+          ? {gradeAttempted: true, gradeNeedsReview: true}
+          : {closeAttempted: true, closeNeedsReview: true});
+        if (!intent) {
+          reason = "Не удалось сохранить защитную отметку для занятия № " +
+            lesson.number + "; пакет остановлен до отправки запроса.";
+          break;
+        }
+        let result;
+        try {
+          result = await executeLessonOperation(journal, lesson, action);
+        } catch (error) {
+          result = {ok: false, verified: false, message: error.message};
+        }
+        if (!result.ok) {
+          const saved = await storeState(id, {
+            lastAction: (grading ? "Оценки" : "Закрытие") + ": проверить после ошибки",
+            lastActionAt: new Date().toISOString()
+          });
+          reason = "Остановлено на занятии № " + lesson.number + " (" + lesson.date +
+            "): " + result.message + (saved ? " Проверьте результат на сайте перед повтором." :
+              " Локальная отметка ошибки не сохранилась.");
+          break;
+        }
+        const saved = await saveActionOutcome(lesson, action, result);
+        if (!saved) {
+          reason = "Действие по занятию № " + lesson.number +
+            " отправлено, но локальный результат не сохранился. Проверьте БАРС перед повтором.";
+          break;
+        }
+        if (!result.verified) {
+          reason = "Остановлено на занятии № " + lesson.number + " (" + lesson.date +
+            "): результат не подтверждён. " + result.message +
+            " Проверьте состояние в БАРС, затем подтвердите или разрешите повтор в этой строке.";
+          break;
+        }
+        completed++;
+        batchStatus.completed = completed;
+        batchStatus.text = label + ": " + completed + " из " +
+          plan.queue.length + ". Проверено занятие № " + lesson.number + " (" + lesson.date + ").";
+        renderRows();
+        message(batchStatus.text);
+      }
+    } catch (error) {
+      reason = "Пакет остановлен: " + error.message;
+    } finally {
+      actionBusy = false;
+      stopRequested = false;
+      const done = completed === plan.queue.length && !reason;
+      batchStatus.text = (done ? "Завершено. " : "Остановлено. ") +
+        label + ": " + completed + " из " + plan.queue.length +
+        (reason ? ". " + reason : ". Все обработанные занятия прошли проверку.");
+      renderRows();
+      message(batchStatus.text, !done);
+    }
+  }
+
+  batchGradesButton.addEventListener("click", () => void runBatchWrite("grades"));
+  batchCloseButton.addEventListener("click", () => void runBatchWrite("close"));
+
+
+
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local" || saving) return;
     const keys = Object.keys(changes);
