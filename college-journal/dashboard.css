@@ -88,3 +88,22 @@ input[type="checkbox"] { width: auto; margin: 0 4px 0 0; accent-color: var(--acc
 #clear-dashboard { color: #932a32; border-color: #dfc1c4; }
 #clear-dashboard:hover:not(:disabled) { background: #fff3f4; }
 .tools p:empty { display: none; }
+
+/* План заполнения */
+.workflow h2 { font-size: 21px; margin: 0 0 9px; }
+.workflow-filter { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; margin: 14px 0; }
+.workflow-filter label { min-width: min(100%, 360px); flex: 1; }
+.workflow-filter .actions { flex: 3; }
+.workflow-wrap { max-height: 52vh; border: 1px solid var(--border); border-radius: 8px; }
+.workflow table { font-size: 13px; }
+.workflow th { z-index: 1; }
+.workflow td { vertical-align: middle; }
+.workflow-number { min-width: 92px; max-width: 120px; }
+.workflow-checks, .workflow-actions, .workflow-score { display: flex; align-items: start; flex-direction: column; gap: 7px; }
+.workflow-check { display: flex; gap: 6px; align-items: center; white-space: nowrap; color: #294954; }
+.workflow-actions button { border-color: var(--border); white-space: nowrap; padding: 5px 9px; }
+.workflow-score { white-space: nowrap; }
+.workflow button:disabled { cursor: default; opacity: .5; }
+#workflow-status[data-error="true"] { color: #9c2c38; }
+#workflow-status { margin: 10px 0 0; }
+@media (max-width: 720px) { .workflow-filter { flex-direction: column; align-items: stretch; } }
