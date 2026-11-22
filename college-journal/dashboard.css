@@ -126,3 +126,9 @@ input[type="checkbox"] { width: auto; margin: 0 4px 0 0; accent-color: var(--acc
 #workflow-close-all { color: #8b2930; border-color: #dfc1c4; }
 #workflow-close-all:hover:not(:disabled) { background: #fff3f4; }
 #workflow-grades-all:disabled, #workflow-close-all:disabled { cursor: default; opacity: .5; }
+
+/* Full journal fill: one start number and one full-run command. */
+.workflow-ktp-start { display: inline-flex; gap: 6px; flex-direction: column; justify-content: center; align-self: center; font-size: 12px; min-width: 145px; max-width: 180px; }
+#workflow-ktp-start { font-size: 14px; max-width: 150px; padding: 8px 10px; }
+#workflow-fill-dates:not(:disabled) { background: #176b55; color: #fff; border-color: #176b55; font-weight: 700; }
+#workflow-fill-dates:disabled { cursor: default; opacity: .5; }
