@@ -452,6 +452,12 @@
         ? [...new Set(records[favoritesKey].filter((item) => typeof item === "string"))] : [];
       stopErrorsInput.checked = records[stopErrorsKey] !== false;
       checkpoint = records[checkpointKey] || null;
+      queueLogs = (checkpoint?.log || []).map((entry) =>
+        "Журнал: " + entry.journal + ". Обработано: " + (entry.processed || 0) +
+        ", ошибок: " + (entry.issues || 0) +
+        ", ожидающих закрытий: " + (entry.pending || 0) +
+        (entry.reason ? ". " + entry.reason : ""));
+      renderQueueResults();
       preferencesLoaded = true;
     }
     journals = Object.entries(records).filter(([key, value]) =>
@@ -1239,10 +1245,8 @@
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   async function saveCheckpoint(patch) {
-    checkpoint = {
-      version: 1, ...(checkpoint || {}), ...patch, updatedAt: new Date().toISOString()
-    };
-    await chrome.storage.local.set({[checkpointKey]: structuredClone(checkpoint)});
+    checkpoint = await collegeQueueCheckpoint.persist(
+      chrome.storage.local, checkpointKey, checkpoint, patch);
   }
 
   async function preflightAll(queue, show = true) {
