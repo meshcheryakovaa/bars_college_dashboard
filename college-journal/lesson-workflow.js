@@ -270,6 +270,7 @@
   }
 
   function renderRows() {
+    window.dispatchEvent(new CustomEvent("college-workflow-busy", {detail: {busy: actionBusy}}));
     renderBatchProgress();
     renderFavorites();
     body.replaceChildren();
