@@ -177,11 +177,11 @@
     let current = await until(() => modalRows(info), 14000,
       "Окно привязки КТП не открылось. Проверьте открытую вкладку БАРС.");
     // БАРС сначала предлагает КТП, затем загружает список его занятий.
-    const firstMatches = current.rows.filter((row) => rowNumberMatch(row, n));
-    if (current.rows.length === 1 || firstMatches.length === 1) {
-      pickRow(current.rows.length === 1 ? current.rows[0] : firstMatches[0]);
+    const matchingPlans = current.rows.filter((row) => clean(row.textContent).includes(clean(task.subject)));
+    if (current.rows.length === 1 || matchingPlans.length === 1) {
+      pickRow(current.rows.length === 1 ? current.rows[0] : matchingPlans[0]);
     } else {
-      throw new Error("В окне привязки несколько вариантов КТП. Выберите нужный КТП вручную и повторите действие.");
+      throw new Error("В окне несколько КТП без однозначного соответствия дисциплине. Выберите КТП вручную, затем повторите привязку.");
     }
     const targetRows = await until(() => {
       const now = modalRows(info);
@@ -202,8 +202,8 @@
     await until(() => net.entries.slice(checkpoint).some(
       (item) => item.path.endsWith("/lessons_tab_rows")), 14000,
     "Привязка отправлена, но обновление журнала не подтверждено.");
-    return {ok: true, verified: true, affected: 1,
-      message: "БАРС принял запрос привязки темы № " + n + " и обновил строки журнала."};
+    return {ok: true, verified: false, affected: 1,
+      message: "Запрос привязки темы № " + n + " завершён и строки журнала обновлены. Проверьте тему в БАРС и отметьте привязку."};
   }
   function gridComponent(info) {
     const ext = window.Ext;
@@ -313,6 +313,8 @@
     let net;
     try {
       const info = scope(task);
+      if (task.action === "check") return {ok: true, verified: true,
+        message: "Сверены группа, предмет, тип журнала, дата, ID занятия и " + info.rightRows.length + " строк студентов."};
       net = ajaxTracker();
       const result = task.action === "bind" ? await bindKtp(task, info, net)
         : task.action === "grades" ? await gradeAll(task, info, net)
