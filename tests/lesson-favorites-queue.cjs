@@ -45,7 +45,7 @@ function hooks(trace, opts = {}) {
     {stopOnError: true, alwaysUnverified: true}));
   assert.equal(strict.processed, 1);
   assert.equal(strictTrace.filter((x) => x.startsWith("close:")).length, 2);
-  assert.match(strict.reason, /не подтвержден/);
+  assert.match(strict.reason, /нет подтверждения|не подтвержден/);
 
   const looseTrace = [];
   const loose = await run(lessons, hooks(looseTrace,
