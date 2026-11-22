@@ -55,7 +55,7 @@ async function clearDashboard() {
   const keys = (await chrome.storage.local.getKeys()).filter((key) =>
     key.startsWith("journal:") || key.startsWith("catalog:") || key.startsWith("workflow:plan:")
     || key === "workflow:favorite-journals" || key === "workflow:stop-on-errors"
-    || key === "workflow:queue-checkpoint");
+    || key === "workflow:queue-checkpoint" || key.startsWith("workflow:enrollment-skip:"));
   await chrome.storage.local.set({"dashboard:cleared-at": Date.now()});
   await chrome.storage.local.remove(keys);
   await chrome.action.setBadgeText({text: ""}).catch(() => {});
