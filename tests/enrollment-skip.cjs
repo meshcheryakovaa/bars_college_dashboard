@@ -141,7 +141,7 @@ function fakeWindow() {
       if (msg.kind !== "persist") return;
       setTimeout(() => {
         for (const fn of [...(ctx.events || [])]) fn({
-          source: ctx, origin: task.origin,
+          source: vm.runInContext("window", ctx), origin: task.origin,
           data: {channel: msg.channel, kind: "ack", requestId: msg.requestId,
             ok: true, skip}
         });
