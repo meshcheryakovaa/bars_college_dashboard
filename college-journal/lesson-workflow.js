@@ -140,6 +140,7 @@
   }
 
   function renderFavorites() {
+    const scrollPosition = favoriteList.scrollTop;
     favoriteList.replaceChildren();
     const available = new Map(journals.map((j) => [journalIdentity(j), j]));
     favoriteCount.textContent = String(favoriteIds.length);
@@ -206,6 +207,7 @@
       }
       favoriteList.append(item);
     }
+    favoriteList.scrollTop = scrollPosition;
   }
 
   async function assignFavoriteKtp(journal, value) {
@@ -1341,6 +1343,20 @@
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local" || saving || actionBusy) return;
+    if (changes["dashboard:cleared-at"]) {
+      favoriteIds = [];
+      stopErrorsInput.checked = true;
+      queueLogs = [];
+      renderQueueResults();
+    }
+    if (changes[favoritesKey]) {
+      favoriteIds = Array.isArray(changes[favoritesKey].newValue)
+        ? [...new Set(changes[favoritesKey].newValue)] : [];
+      renderFavorites();
+    }
+    if (changes[stopErrorsKey]) {
+      stopErrorsInput.checked = changes[stopErrorsKey].newValue !== false;
+    }
     const keys = Object.keys(changes);
     if (keys.some((key) => key.startsWith("journal:") || key === keyFor(selectedKey) || key === "dashboard:cleared-at")) {
       void refresh().catch((error) => message(error.message, true));
