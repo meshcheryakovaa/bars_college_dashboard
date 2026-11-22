@@ -1,7 +1,7 @@
 /* Запись через штатные Ext JS обработчики БАРС, без прямых запросов к API. */
 (() => {
   "use strict";
-  if (window.__barsLessonActions?.version === 1) return;
+  if (window.__barsLessonActions?.version === 2) return;
   const clean = (x) => String(x ?? "").replace(/\s+/g, " ").trim();
   const shown = (x) => Boolean(x?.isConnected && x.getClientRects().length);
   const cells = (row) => [...row.querySelectorAll("td.x-grid3-cell")];
@@ -388,5 +388,5 @@
       running = false;
     }
   }
-  window.__barsLessonActions = {version: 1, run, stop() {stopRequested = true;}};
+  window.__barsLessonActions = {version: 2, run, stop() {stopRequested = true;}};
 })();
