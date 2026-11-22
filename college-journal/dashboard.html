@@ -72,6 +72,23 @@
           <button type="button" id="workflow-stop" disabled>Остановить действие</button>
         </div>
       </div>
+      <section class="workflow-queue" aria-label="Очередь избранных журналов">
+        <label class="workflow-stop-errors">
+          <input id="workflow-stop-errors" type="checkbox" checked>
+          Останавливать при ошибках и неподтверждённых операциях
+        </label>
+        <p class="muted">Если снять флажок, проблемные занятия отмечаются для проверки и пропускаются; следующие даты и журналы продолжают обрабатываться. Повторная отправка не выполняется автоматически.</p>
+        <details id="workflow-favorites-details">
+          <summary>Избранные журналы и порядок очереди (<span id="workflow-favorite-count">0</span>)</summary>
+          <div id="workflow-favorite-list" class="workflow-favorite-list"></div>
+        </details>
+        <div class="actions">
+          <button type="button" id="workflow-run-queue" disabled>ЗАПОЛНИТЬ ОЧЕРЕДЬ ЖУРНАЛОВ</button>
+          <button type="button" id="workflow-clear-queue" disabled>Очистить избранное</button>
+        </div>
+        <p id="workflow-queue-status" class="muted" aria-live="polite" role="status"></p>
+        <ol id="workflow-queue-results" class="workflow-queue-results" aria-label="Результаты очереди"></ol>
+      </section>
       <p id="workflow-summary" class="muted"></p>
       <div id="workflow-batch-status" class="workflow-batch-status" hidden role="status" aria-live="polite">
         <span id="workflow-batch-text"></span>
