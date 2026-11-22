@@ -1,0 +1,37 @@
+name: Extension and KTP generator checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: JavaScript syntax and behavioral regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax validation
+        run: |
+          set -euo pipefail
+          for file in college-journal/*.js ktp-generator/*.js tests/*.cjs; do
+            node --check "$file"
+          done
+      - name: Behavioral regression tests
+        run: |
+          set -euo pipefail
+          for file in tests/*.cjs; do
+            echo "::group::$file"
+            node "$file"
+            echo "::endgroup::"
+          done
