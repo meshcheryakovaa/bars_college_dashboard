@@ -161,3 +161,9 @@ input[type="checkbox"] { width: auto; margin: 0 4px 0 0; accent-color: var(--acc
 .workflow-preflight-result p { margin: 0; padding: 9px 12px; border: 1px solid var(--border); border-radius: 6px; overflow-wrap: anywhere; font-size: 13px; }
 .workflow-preflight-result p[data-ready="false"] { border-color: #e1c5ca; background: #fff9f9; }
 #workflow-resume-queue:not(:disabled), #workflow-preflight:not(:disabled) { font-weight: 600; }
+
+/* Per-lesson enrollment exceptions, explicitly tied to student + lesson ID. */
+.workflow-grade-report { display: block; margin: 5px 0; font-weight: 600; overflow-wrap: anywhere; }
+.workflow-enrollment-skip { display: flex; align-items: center; gap: 8px; padding: 5px 0; flex-wrap: wrap; border-top: 1px solid var(--border); }
+.workflow-enrollment-skip small { flex: 1; min-width: 140px; color: var(--muted); overflow-wrap: anywhere; }
+.workflow-enrollment-skip button { font-size: 12px; padding: 4px 6px; }
