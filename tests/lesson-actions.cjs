@@ -29,7 +29,7 @@ const context = {
   setTimeout
 };
 vm.runInNewContext(source, context, {filename: "lesson-actions-page.js"});
-assert.equal(window.__barsLessonActions.version, 1);
+assert.equal(window.__barsLessonActions.version, 2);
 
 (async () => {
   const badOrigin = await window.__barsLessonActions.run({
