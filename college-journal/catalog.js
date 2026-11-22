@@ -44,6 +44,9 @@ function catalogDocument(stored) {
   const {groups, selected, unassigned} = catalogFromStorage(stored);
   return {
     schemaVersion: 1,
+    queueCheckpoint: stored["workflow:queue-checkpoint"] || null,
+    favoriteJournals: stored["workflow:favorite-journals"] || [],
+    stopOnErrors: stored["workflow:stop-on-errors"] !== false,
     lessonPlans: Object.entries(stored).filter(([key]) => key.startsWith("workflow:plan:"))
       .map(([key, value]) => ({key, ...value})),
     unassignedStudents: [...unassigned.values()],
