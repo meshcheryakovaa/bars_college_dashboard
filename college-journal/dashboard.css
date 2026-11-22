@@ -121,3 +121,8 @@ input[type="checkbox"] { width: auto; margin: 0 4px 0 0; accent-color: var(--acc
 #workflow-batch-progress { width: 100%; max-width: 720px; height: 13px; accent-color: var(--accent); }
 #workflow-bind-all:not(:disabled) { background: var(--accent); color: white; border-color: var(--accent); }
 #workflow-bind-all:disabled { cursor: default; opacity: .5; }
+
+#workflow-grades-all:not(:disabled) { border-color: var(--accent); background: #edf6f3; color: var(--accent); }
+#workflow-close-all { color: #8b2930; border-color: #dfc1c4; }
+#workflow-close-all:hover:not(:disabled) { background: #fff3f4; }
+#workflow-grades-all:disabled, #workflow-close-all:disabled { cursor: default; opacity: .5; }
