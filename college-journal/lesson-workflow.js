@@ -8,6 +8,8 @@
   const summary = document.querySelector("#workflow-summary");
   const numberAll = document.querySelector("#workflow-number-all");
   const batchBindButton = document.querySelector("#workflow-bind-all");
+  const batchGradesButton = document.querySelector("#workflow-grades-all");
+  const batchCloseButton = document.querySelector("#workflow-close-all");
   const batchPanel = document.querySelector("#workflow-batch-status");
   const batchText = document.querySelector("#workflow-batch-text");
   const batchProgress = document.querySelector("#workflow-batch-progress");
@@ -89,7 +91,9 @@
       linked: ids.filter((id) => stateFor(id).linked).length,
       graded: ids.filter((id) => stateFor(id).graded).length,
       closed: ids.filter((id) => stateFor(id).closed).length,
-      attempted: ids.filter((id) => stateFor(id).bindAttempted && !stateFor(id).linked).length
+      attempted: ids.filter((id) => stateFor(id).bindAttempted && !stateFor(id).linked).length,
+      gradePending: ids.filter((id) => stateFor(id).gradeAttempted && !stateFor(id).graded).length,
+      closePending: ids.filter((id) => stateFor(id).closeAttempted && !stateFor(id).closed).length
     };
   }
   async function persist() {
@@ -122,6 +126,8 @@
     stopAction.disabled = !actionBusy || sourceTabId === null;
     prepareAll.disabled = actionBusy || !journal;
     batchBindButton.disabled = actionBusy || !journal || sourceTabId === null;
+    batchGradesButton.disabled = actionBusy || !journal || sourceTabId === null;
+    batchCloseButton.disabled = actionBusy || !journal || sourceTabId === null;
     if (!journal) {
       summary.textContent = "Выберите собранный журнал.";
       numberAll.disabled = resetPlan.disabled = true;
@@ -132,6 +138,8 @@
     summary.textContent = "Занятий: " + c.total + " · КТП подтверждено: " + c.linked
       + " · Оценки подтверждены: " + c.graded + " · Закрытие подтверждено: " + c.closed
       + " · КТП отправлено, ожидает проверки: " + c.attempted
+      + " · Оценки требуют проверки: " + c.gradePending
+      + " · Закрытие требует проверки: " + c.closePending
       + " · Студентов: " + journal.students.length;
 
     for (const lesson of lessonOrder(journal)) {
@@ -180,14 +188,19 @@
             ...(checked ? {} : {bindAttempted: false, bindNeedsReview: false, lastAction: ""})}).then(renderRows);
         }, actionBusy || !state.ktpNumber),
         checkbox("Тройки внесены", Boolean(state.graded), (checked) => {
-          void storeState(id, {graded: checked, closed: false}).then(renderRows);
+          void storeState(id, {graded: checked, closed: false,
+            ...(checked ? {gradeAttempted: true, gradeNeedsReview: false}
+              : {gradeAttempted: false, gradeNeedsReview: false, closeAttempted: false,
+                closeNeedsReview: false})}).then(renderRows);
         }, actionBusy || !state.gradesPrepared),
         checkbox("Занятие закрыто", Boolean(state.closed), (checked) => {
           if (checked && !window.confirm("Подтвердите, что занятие действительно закрыто в БАРС. Это отметка ручной проверки.")) {
             renderRows();
             return;
           }
-          void storeState(id, {closed: checked}).then(renderRows);
+          void storeState(id, {closed: checked,
+            ...(checked ? {closeAttempted: true, closeNeedsReview: false}
+              : {closeAttempted: false, closeNeedsReview: false})}).then(renderRows);
         }, actionBusy || !state.linked || !state.graded)
       );
       makeCell(row, checks);
@@ -212,6 +225,26 @@
             renderRows();
             message(saved ? "Для занятия № " + lesson.number + " разрешена повторная отправка КТП." :
               "Не удалось сохранить снятие блокировки.", !saved);
+          });
+        }, actionBusy));
+      }
+      if (!state.graded && (state.gradeAttempted || state.gradeNeedsReview || /^Оценки:/.test(state.lastAction || ""))) {
+        actions.append(button("Разрешить повтор оценок", () => {
+          if (!window.confirm("Проверьте уже выставленные оценки в БАРС. Разрешить повторную попытку выставления троек в занятии № " +
+            lesson.number + " (" + lesson.date + ")? Непустые оценки сохранятся.")) return;
+          void storeState(id, {gradeAttempted: false, gradeNeedsReview: false}).then((saved) => {
+            renderRows();
+            message(saved ? "Повторная попытка оценивания разрешена." : "Не удалось сохранить разрешение.", !saved);
+          });
+        }, actionBusy));
+      }
+      if (!state.closed && (state.closeAttempted || state.closeNeedsReview || /^Закрытие:/.test(state.lastAction || ""))) {
+        actions.append(button("Разрешить повтор закрытия", () => {
+          if (!window.confirm("Проверьте состояние занятия № " + lesson.number + " (" + lesson.date +
+            ") в БАРС. Разрешить повторный вызов закрытия только если занятие ещё открыто?")) return;
+          void storeState(id, {closeAttempted: false, closeNeedsReview: false}).then((saved) => {
+            renderRows();
+            message(saved ? "Повторная попытка закрытия разрешена." : "Не удалось сохранить разрешение.", !saved);
           });
         }, actionBusy));
       }
@@ -347,11 +380,19 @@
       patch.bindNeedsReview = false;
       if (result.verified) patch.linked = true;
     }
-    if (result.verified && action === "grades") {
-      patch.gradesPrepared = true;
-      patch.graded = true;
+    if (action === "grades") {
+      patch.gradeAttempted = true;
+      patch.gradeNeedsReview = !result.verified;
+      if (result.verified) {
+        patch.gradesPrepared = true;
+        patch.graded = true;
+      }
     }
-    if (result.verified && action === "close") patch.closed = true;
+    if (action === "close") {
+      patch.closeAttempted = true;
+      patch.closeNeedsReview = !result.verified;
+      if (result.verified) patch.closed = true;
+    }
     return storeState(String(lesson.id), patch);
   }
 
