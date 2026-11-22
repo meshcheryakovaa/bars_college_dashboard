@@ -27,6 +27,13 @@
     const expectedDate = fullDate(task.date, task.period);
     return expectedDate !== null && same(data.date, expectedDate);
   }
+  function storageKey(task, studentId) {
+    return "workflow:enrollment-skip:" + JSON.stringify([
+      task.origin, task.period, task.group, task.subject,
+      task.practical ? "practical" : "theoretical",
+      String(task.lessonId), String(studentId)
+    ]);
+  }
   function validSkip(skip, task, studentId) {
     return Boolean(skip && skip.reason === "not-enrolled-on-lesson-date" &&
       String(skip.lessonId) === String(task.lessonId) &&
@@ -52,6 +59,6 @@
         skippedNonEnrolled, scored: threes + nonThree}};
   }
   globalThis.__barsEnrollmentSkip = Object.freeze({
-    norm, same, group, parseWarning, fullDate, matchWarning, validSkip, evaluate
+    norm, same, group, parseWarning, fullDate, matchWarning, storageKey, validSkip, evaluate
   });
 })();
