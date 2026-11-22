@@ -250,7 +250,8 @@
     const problem = async (lesson, stage, result) => {
       const name = stage === "bind" ? "КТП" : stage === "grades" ? "оценки" :
         stage === "close" ? "закрытие" : "проверка закрытия";
-      const detail = "Занятие № " + lesson.number + " (" + lesson.date +
+      const detail = (stage === "refresh" ? "Не удалось обновить и проверить занятие № " :
+        "Занятие № ") + lesson.number + " (" + lesson.date +
         "), этап " + name + ": " + (result?.message || "нет подтверждения");
       if (!issues.some((entry) => String(entry.lesson.id) === String(lesson.id) &&
         entry.stage === stage)) issues.push({lesson, stage, message: detail});
@@ -313,7 +314,7 @@
         const current = await verify(lesson, true);
         if (!current?.ok) {
           pending.push(lesson);
-          const halt = await problem(lesson, "verify", current);
+          const halt = await problem(lesson, "refresh", current);
           if (halt) break;
           processed++;
           await hooks.progress({lesson, stage: "done", processed, verifiedClose, skipped, pending});
