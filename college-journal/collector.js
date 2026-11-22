@@ -558,7 +558,7 @@
         throw new Error("Группа изменилась во время выбора дисциплины.");
       pageCommand(current, "select", matches[0]);
     }
-    const selected = await waitStable(() => {
+    let selected = await waitStable(() => {
       const active = findScope(practical);
       if (!active || masked(active)) return null;
       const state = pageCommand(active, "state");
@@ -566,11 +566,43 @@
       const journal = readPage(active);
       return matching(journal) ? {key: JSON.stringify(journal), value: journal} : null;
     }, signal, "Не загрузился выбранный предмет «" + target.subject + "».");
-    const ids = new Set(selected.lessons.map((lesson) => String(lesson.id)));
-    const missing = (target.lessonIds || []).filter((id) => !ids.has(String(id)));
+    const missingIds = (journal) => {
+      const found = new Set(journal.lessons.map(({id}) => String(id)));
+      return (target.lessonIds || []).filter((id) => !found.has(String(id)));
+    };
+    let missing = missingIds(selected);
+    if (missing.length && target.lessons?.length) {
+      const years = /^(\d{4})\s*[-–—/]\s*(\d{4})$/.exec(target.period);
+      if (years) {
+        const dates = target.lessons.map(({date}) => {
+          const m = /^(\d{1,2})\.(\d{1,2})(?:\.(\d{2}|\d{4}))?$/.exec(date);
+          if (!m) throw new Error("Некорректная дата в сохранённом журнале: " + date);
+          const month = Number(m[2]), day = Number(m[1]);
+          const year = m[3] ? (m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]))
+            : Number(month >= 9 ? years[1] : years[2]);
+          const check = new Date(Date.UTC(year, month - 1, day));
+          if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1
+            || check.getUTCDate() !== day) throw new Error("Неверная дата в журнале: " + date);
+          return [year, String(month).padStart(2, "0"), String(day).padStart(2, "0")].join("-");
+        });
+        const sorted = dates.sort();
+        await applyDates({from: sorted[0], to: sorted[sorted.length - 1]}, signal, practical);
+        selected = await waitStable(() => {
+          const active = findScope(practical);
+          if (!active || masked(active)) return null;
+          const state = pageCommand(active, "state");
+          if (state.busy || state.pickerBusy) return null;
+          const data = readPage(active);
+          return matching(data) && !missingIds(data).length
+            ? {key: JSON.stringify(data), value: data} : null;
+        }, signal, "Не загрузились занятия после применения диапазона дат.");
+        missing = missingIds(selected);
+      }
+    }
     if (missing.length) {
       throw new Error("В открытой таблице отсутствует " + missing.length +
-        " занятий из сохранённого журнала. Проверьте диапазон дат БАРС и повторите сбор.");
+        " занятий из сохранённого журнала даже после применения дат. " +
+        "Пересоберите этот журнал перед заполнением очереди.");
     }
     return {
       group: selected.group, subject: selected.subject, kind: selected.kind || "theoretical",
