@@ -286,6 +286,14 @@
         // выбранного занятия. Отрицательный ответ может быть задержкой.
         await hooks.progress({lesson, stage: "refresh", processed, verifiedClose});
         const current = await verify(lesson, true);
+        if (!current?.ok) {
+          reason = "Не удалось обновить и проверить занятие № " +
+            lesson.number + " (" + lesson.date + "): " +
+            (current?.message || "ошибка обновления БАРС");
+          // Запрос закрытия уже отправлен. Не повторяем его автоматически.
+          pending = lesson;
+          break;
+        }
         const previous = pending;
         if (previous) {
           const previousResult = await verify(previous, false);
