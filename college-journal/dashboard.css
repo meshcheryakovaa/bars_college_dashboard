@@ -114,3 +114,10 @@ input[type="checkbox"] { width: auto; margin: 0 4px 0 0; accent-color: var(--acc
 
 #workflow-stop { color: #9c2c38; }
 #workflow-stop:not(:disabled) { border-color: #d79ba2; }
+
+/* Sequential KTP actions run in a background tab while the dashboard stays visible. */
+.workflow-batch-status { padding: 11px 12px; margin: 10px 0; border: 1px solid var(--border); border-radius: 8px; background: #f5faf9; display: grid; gap: 8px; font-size: 14px; }
+.workflow-batch-status[hidden] { display: none; }
+#workflow-batch-progress { width: 100%; max-width: 720px; height: 13px; accent-color: var(--accent); }
+#workflow-bind-all:not(:disabled) { background: var(--accent); color: white; border-color: var(--accent); }
+#workflow-bind-all:disabled { cursor: default; opacity: .5; }
