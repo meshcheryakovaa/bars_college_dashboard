@@ -169,5 +169,70 @@
     }
     return {submitted, verified, pending: previous, reason};
   }
-  globalThis.collegeLessonBatch = Object.freeze({prepare, prepareGrades, prepareClose, resumableClose, runDelayedClose});
+  // Даты 01.09–31.08 принадлежат одному учебному году; в одну дату
+  // порядок задаёт номер занятия. По каждой записи обязательно уникальный ID.
+  function lessonsByDate(journal) {
+    const lessons = validatedLessons(journal);
+    const period = /^(\d{4})\s*[-/]\s*(\d{4})$/.exec(String(journal?.period || ""));
+    const dateKey = (lesson) => {
+      const match = /^(\d{1,2})\.(\d{1,2})(?:\.(\d{2}|\d{4}))?$/.exec(String(lesson.date || ""));
+      if (!match) throw new Error("Не распознана дата занятия № " + lesson.number + ": " + lesson.date);
+      const day = Number(match[1]), month = Number(match[2]);
+      const year = match[3]
+        ? (match[3].length === 2 ? 2000 + Number(match[3]) : Number(match[3]))
+        : period ? (Number(period[1]) + (month < 9 ? 1 : 0))
+          : (month < 9 ? 2001 : 2000);
+      if (month < 1 || month > 12 ||
+        new Date(Date.UTC(year, month - 1, day)).getUTCDate() !== day ||
+        new Date(Date.UTC(year, month - 1, day)).getUTCMonth() !== month - 1)
+        throw new Error("Некорректная дата занятия № " + lesson.number + ": " + lesson.date);
+      return year * 10000 + month * 100 + day;
+    };
+    return lessons.map((lesson, index) => ({lesson, index, date: dateKey(lesson)}))
+      .sort((a, b) => a.date - b.date || Number(a.lesson.number) - Number(b.lesson.number) || a.index - b.index)
+      .map((item) => item.lesson);
+  }
+
+  function assignKtpSequence(journal, start) {
+    const value = String(start).trim();
+    if (!numeric(value)) throw new Error("Начальный № КТП — целое число от 1 до 9999.");
+    const lessons = lessonsByDate(journal);
+    const first = Number(value);
+    if (first + lessons.length - 1 > 9999)
+      throw new Error("Номера тем КТП выходят за пределы 9999.");
+    return lessons.map((lesson, index) => ({lesson, ktpNumber: String(first + index)}));
+  }
+
+  function prepareFull(journal, entries = {}) {
+    const queue = [], completed = [], problems = [];
+    const lessons = lessonsByDate(journal);
+    for (const lesson of lessons) {
+      const state = entries[String(lesson.id)] || {};
+      if (state.closed) {completed.push(lesson); continue;}
+      if (!numeric(state.ktpNumber)) {
+        problems.push({lesson, reason: "не указан номер темы КТП"});
+        continue;
+      }
+      // Не допускается повторная отправка действий с неизвестным результатом.
+      if (!state.linked && (state.bindAttempted || state.bindNeedsReview)) {
+        problems.push({lesson, reason: "ранее отправленная привязка КТП требует проверки"});
+        continue;
+      }
+      if (!state.graded && (state.gradeAttempted || state.gradeNeedsReview)) {
+        problems.push({lesson, reason: "ранее выставленные оценки требуют проверки"});
+        continue;
+      }
+      if (state.closeAttempted || state.closeNeedsReview) {
+        problems.push({lesson, reason: "предыдущее закрытие требует проверки"});
+        continue;
+      }
+      queue.push(lesson);
+    }
+    return {queue, completed, problems, total: lessons.length};
+  }
+
+  globalThis.collegeLessonBatch = Object.freeze({
+    prepare, prepareGrades, prepareClose, resumableClose, runDelayedClose,
+    lessonsByDate, assignKtpSequence, prepareFull
+  });
 })();
