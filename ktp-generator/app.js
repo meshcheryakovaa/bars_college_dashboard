@@ -69,6 +69,11 @@ importAdd.onclick = () => {
     const selected = importedCatalog.filter((row) =>
       row.disciplines.some((item) => item.name === importSubject.value));
     if (!selected.length) throw new Error('Нет групп с этой дисциплиной.');
+    // Удаляем только неизменённую демонстрационную первую строку:
+    // реальные введённые пользователем реквизиты никогда не удаляются.
+    if (groups.length === 1 && fields.every(([key]) => groups[0][key] === initial[key])) {
+      groups.length = 0;
+    }
     const existing = new Set(groups.map((row) =>
       JSON.stringify([row.group, row.subject, row.period])));
     let added = 0;
