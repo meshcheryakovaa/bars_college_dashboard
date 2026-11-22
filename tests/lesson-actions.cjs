@@ -7,7 +7,7 @@ const source = fs.readFileSync(path.join(__dirname, "..", "college-journal", "le
 const workflow = fs.readFileSync(path.join(__dirname, "..", "college-journal", "lesson-workflow.js"), "utf8");
 const html = fs.readFileSync(path.join(__dirname, "..", "college-journal", "dashboard.html"), "utf8");
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "college-journal", "manifest.json"), "utf8"));
-assert.equal(manifest.version, "1.10.0");
+assert.equal(manifest.version, "1.10.1");
 assert(!/\bfetch\s*\(|new\s+XMLHttpRequest|Ext\.Ajax\.request/.test(source),
   "Page automation must not send direct requests");
 assert(html.includes('src="lesson-actions-page.js"') === false,
