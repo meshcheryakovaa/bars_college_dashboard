@@ -74,5 +74,81 @@
     }
     return {queue, completed, attempted, unresolved, blocked, total: lessons.length};
   }
-  globalThis.collegeLessonBatch = Object.freeze({prepare, prepareGrades, prepareClose});
+
+  // BARS показывает закрытие занятия на один запрос позже.
+  // Отправка [A, B, C] и проверки: close(A), close(B), verify(A),
+  // close(C), verify(B), refresh+verify(C). Последний может остаться
+  // неподтверждённым — его НЕЛЬЗЯ повторно закрывать автоматически.
+  async function runDelayedClose(queue, hooks) {
+    let submitted = 0, verified = 0, previous = null, reason = "";
+    for (const lesson of queue) {
+      if (hooks.stopped()) {
+        reason = "Операция остановлена пользователем.";
+        break;
+      }
+      if (!await hooks.beforeSubmit(lesson, {submitted, verified})) {
+        reason = "Не удалось сохранить защитную отметку до закрытия занятия.";
+        break;
+      }
+      let sent;
+      try {
+        sent = await hooks.submit(lesson);
+      } catch (error) {
+        sent = {ok: false, message: error.message};
+      }
+      if (!sent?.ok) {
+        await hooks.onError(lesson, sent);
+        reason = "Не удалось отправить закрытие: " + (sent?.message || "неизвестная ошибка");
+        break;
+      }
+      submitted++;
+      if (!await hooks.onSubmitted(lesson, sent)) {
+        reason = "Запрос отправлен, но результат не удалось сохранить локально.";
+        break;
+      }
+      if (previous) {
+        let check;
+        try {
+          check = await hooks.verify(previous, false);
+        } catch (error) {
+          check = {ok: false, verified: false, message: error.message};
+        }
+        if (!check?.ok || !check.verified) {
+          await hooks.onUnverified(previous, check);
+          reason = "Не подтверждено предыдущее занятие: " +
+            (check?.message || "состояние неизвестно");
+          break;
+        }
+        if (!await hooks.onVerified(previous, check)) {
+          reason = "Закрытие предыдущего занятия подтверждено, но не удалось сохранить результат.";
+          break;
+        }
+        verified++;
+      }
+      previous = lesson;
+      await hooks.progress({submitted, verified, previous});
+    }
+    if (!reason && previous) {
+      // Не посылаем фиктивное закрытие следующего занятия. Для последнего
+      // делаем штатное обновление журнала и повторное чтение состояния.
+      let final;
+      try {
+        final = await hooks.verify(previous, true);
+      } catch (error) {
+        final = {ok: false, verified: false, message: error.message};
+      }
+      if (final?.ok && final.verified) {
+        if (await hooks.onVerified(previous, final)) {
+          verified++;
+          previous = null;
+        } else {
+          reason = "Закрытие последнего занятия подтверждено, но локальная запись не сохранилась.";
+        }
+      } else {
+        await hooks.onUnverified(previous, final);
+      }
+    }
+    return {submitted, verified, pending: previous, reason};
+  }
+  globalThis.collegeLessonBatch = Object.freeze({prepare, prepareGrades, prepareClose, runDelayedClose});
 })();
